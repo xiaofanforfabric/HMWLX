@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+}
+
+group = 'org.cn.xiaofan'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    // 腾讯云镜像优先，官方源兜底
+    maven {
+        name = 'TencentCloud'
+        url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        allowInsecureProtocol = false
+    }
+    maven {
+        name = 'TencentCloudGradlePlugin'
+        url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
+    }
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:6.0.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}

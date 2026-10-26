@@ -1,0 +1,27 @@
+// 插件仓库与依赖仓库都走腾讯云镜像（放在最前面，避免先打官方仓库）
+pluginManagement {
+    repositories {
+        maven {
+            name = 'TencentCloudGradlePlugin'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
+        }
+        maven {
+            name = 'TencentCloud'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            name = 'TencentCloud'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'HMYLX'
