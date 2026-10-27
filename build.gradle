@@ -45,6 +45,12 @@ dependencies {
     //      被 PaperVersionService / PurpurVersionService 继承（必须扫继承链才查得到）
     implementation 'com.github.xiaofanforfabric:headlessmc:0df01d2043'
 
+    // headlessmc-auth-impl 通过传递依赖引入 minecraftauth，但 JitPack 发布的元数据
+    // 里它的作用域不保证是 compile，Kotlin 编译期看不到 MsaDeviceCode 等类型。
+    // 这里显式声明运行时同版本（5.0.2，与 headlessmc 0df01d2043 拉下来的一致），
+    // 保证编译期可见且不与运行期版本冲突。
+    compileOnly 'net.raphimc:MinecraftAuth:5.0.2'
+
     // Compose Desktop UI
     implementation compose.desktop.currentOs
     implementation compose.material3

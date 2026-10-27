@@ -78,6 +78,7 @@ fun AccountSwitchScreen(
     // 会并发写同一个文件，结果是两边都不生效。干脆挡住重复点击。
     var switching by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var showMicrosoftLogin by remember { mutableStateOf(false) }
 
     // 读账号列表要读 headlessmc 的存储文件，交给 AccountService 自己切到 IO。
     LaunchedEffect(Unit) {
@@ -136,8 +137,7 @@ fun AccountSwitchScreen(
                     Spacer(Modifier.height(12.dp))
 
                     Button(
-                        onClick = { },
-                        enabled = false,
+                        onClick = { showMicrosoftLogin = true },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(text(TextKey.ACCOUNT_LOGIN_MICROSOFT))
@@ -190,6 +190,24 @@ fun AccountSwitchScreen(
                 }
             },
             onDismiss = { showAddOffline = false },
+        )
+    }
+
+    if (showMicrosoftLogin) {
+        MicrosoftLoginDialog(
+            onLoggedIn = { loggedIn ->
+                showMicrosoftLogin = false
+                scope.launch {
+                    // 与离线账号新增一致：先刷新列表再切号
+                    groups = AccountService.groupedAccounts()
+                    if (AccountService.switchTo(loggedIn)) {
+                        onSwitched(loggedIn)
+                    } else {
+                        error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, loggedIn.name)
+                    }
+                }
+            },
+            onDismiss = { showMicrosoftLogin = false },
         )
     }
 }
