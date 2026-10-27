@@ -1,8 +1,17 @@
 buildscript {
     repositories {
-        // 插件自身的依赖必须从官方源取：腾讯云 gradle-plugins 仓库不代理
-        // io.quarkus 的 devtools/bootstrap 构件，会 404。
-        mavenCentral()
+        // 走腾讯云镜像，不要把 Maven Central 放在首位：
+        // CI（如 CNB 构建机）里直连 repo.maven.apache.org 会被 429 Too Many Requests 拦下，
+        // 表现为 "Could not resolve all artifacts for configuration 'classpath'"。
+        // 镜像对四个插件 marker（kotlin.jvm / kotlin.plugin.compose / compose / quarkus）均有代理。
+        maven {
+            name = 'TencentCloudGradlePlugin'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
+        }
+        maven {
+            name = 'TencentCloud'
+            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+        }
         gradlePluginPortal()
     }
 }
