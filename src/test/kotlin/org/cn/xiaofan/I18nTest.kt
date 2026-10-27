@@ -1,5 +1,6 @@
 package org.cn.xiaofan
 
+import io.github.headlesshq.headlessmc.auth.AuthProvider
 import org.cn.xiaofan.account.AccountResolver
 import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.i18n.Language
@@ -49,7 +50,25 @@ class I18nTest {
 
     @Test
     fun `账号来源标签走语言包`() {
-        val offline = AccountResolver.fromAccount(name = "Steve", provider = "OFFLINE", uuid = "0".repeat(32))
+        // provider 用 AuthProvider 常量而不是字面量：headlessmc 这几个值是全小写的
+        // （offline / default / yggdrasil），写成 "OFFLINE" 会落到 else 分支直接回显原值，
+        // 看起来像翻译丢了，其实是大小写没对上。
+        val offline = AccountResolver.fromAccount(
+            name = "Steve",
+            provider = AuthProvider.OFFLINE,
+            uuid = "0".repeat(32),
+        )
         assertEquals("离线", offline.sourceLabel())
+        assertEquals("正版", profileOf(AuthProvider.DEFAULT).sourceLabel())
+        assertEquals("皮肤站", profileOf(AuthProvider.YGGDRASIL).sourceLabel())
     }
+
+    /** 未知 provider 不做翻译，原样回显。 */
+    @Test
+    fun `未知 provider 原样显示`() {
+        assertEquals("custom", profileOf("custom").sourceLabel())
+    }
+
+    private fun profileOf(provider: String) =
+        AccountResolver.fromAccount(name = "Steve", provider = provider, uuid = "0".repeat(32))
 }
