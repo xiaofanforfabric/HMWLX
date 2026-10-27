@@ -7,6 +7,11 @@
 # JDK：headlessmc 3.0.0-RC10-cn.* 的 class 文件要求 JVM 25+，
 #      因此统一使用带 JDK 25 的镜像。
 #
+# LANG：必须显式给 UTF-8。镜像里 LANG 为空时，JDK 的文件名编码退回 ASCII
+#      （-Dsun.jnu.encoding 在 JDK 18+ 已无法覆盖），而测试方法名是中文，
+#      生成 HTML 报告时会抛 "Malformed input or input contains unmappable characters"，
+#      测试全绿却让整个 Stage 失败。
+#
 # ${CNB_COMMIT_MESSAGE_TITLE} 是提交信息首行，
 # 用 grep -qE '^(rel|beta|RC|test):' 判断是否为发布意图提交。
 
@@ -16,6 +21,10 @@
     - name: ci
       docker:
         image: eclipse-temurin:25-jdk
+        # 中文测试名 -> 中文报告文件名，文件名编码必须是 UTF-8
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         volumes:
           # Gradle 缓存跨构建复用，避免每次重下依赖
           - main:/root/.gradle:copy-on-write
@@ -46,6 +55,10 @@
     - name: pr-check
       docker:
         image: eclipse-temurin:25-jdk
+        # 中文测试名 -> 中文报告文件名，文件名编码必须是 UTF-8
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         volumes:
           # PR 场景缓存只读，避免并发写入冲突
           - main:/root/.gradle:copy-on-write-read-only

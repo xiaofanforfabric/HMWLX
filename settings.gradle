@@ -1,16 +1,43 @@
-// 插件仓库与依赖仓库都走腾讯云镜像。
+// 仓库策略（2026-10 修订）
 //
-// 注意仓库顺序：gradle-plugins 必须排在最前。
-// 因为 Gradle 插件的 marker 构件（形如 org.jetbrains.kotlin.jvm.gradle.plugin）
-// 在 maven-public 上并不完整 —— 例如 io.quarkus.gradle.plugin 在 maven-public 是 404，
-// 只有腾讯云的 gradle-plugins 仓库同时代理了全部插件 marker。
-// 若 maven-public 排在前面，Gradle 会 404 后继续往 gradlePluginPortal / mavenCentral 找，
-// 在 CI 环境（如 CNB 构建机）会撞上 Maven Central 的 429 Too Many Requests。
+// 背景：CI 构建机的出网 IP 常被 Maven Central 限流，直接 mavenCentral() 会拿到
+// 429 Too Many Requests，所以默认全走国内镜像，官方源只作最后兜底。
+//
+// 三条踩过的坑，决定了下面的顺序：
+//
+// 1. 插件 marker（io.quarkus.gradle.plugin 等）在 maven-public / aliyun / huaweicloud
+//    上都是 404，只有腾讯云 gradle-plugins 和 plugins.gradle.org 有。
+//
+// 2. gradle-plugins 里只有插件坐标，没有插件自身的传递依赖
+//    （quarkus-bootstrap-core、aesh 等在它里面 404）。Gradle 一旦为某个模块选定仓库，
+//    就只会去那一个仓库找它的全部构件，所以两类坐标必须用 exclusiveContent 隔开。
+//
+// 3. 腾讯云 maven-public 不可靠：同一构件会间歇性返回 404（同一 URL 连查几次在
+//    404/200 之间跳），拿到 404 后 Gradle 会禁用整个仓库并回落到 gradlePluginPortal
+//    / mavenCentral，于是 429 又回来了。阿里云 / 华为云没有这个问题，
+//    所以它们排在腾讯云前面。
 pluginManagement {
     repositories {
+        // 插件坐标专用空域
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'TencentCloudGradlePlugin'
+                    url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
+                }
+            }
+            filter {
+                includeModuleByRegex(".*", ".*\\.gradle\\.plugin")
+            }
+        }
+        // 插件自身的依赖
         maven {
-            name = 'TencentCloudGradlePlugin'
-            url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
+            name = 'Aliyun'
+            url = 'https://maven.aliyun.com/repository/public/'
+        }
+        maven {
+            name = 'HuaweiCloud'
+            url = 'https://mirrors.huaweicloud.com/repository/maven/'
         }
         maven {
             name = 'TencentCloud'
@@ -22,6 +49,20 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositories {
+        // 只存在于 JitPack 的构件（headlessmc 及其子模块）放最前，直接打真源，
+        // 镜像上的 pom 会 404。
+        maven {
+            name = 'JitPack'
+            url = 'https://jitpack.io'
+        }
+        maven {
+            name = 'Aliyun'
+            url = 'https://maven.aliyun.com/repository/public/'
+        }
+        maven {
+            name = 'HuaweiCloud'
+            url = 'https://mirrors.huaweicloud.com/repository/maven/'
+        }
         maven {
             name = 'TencentCloud'
             url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
