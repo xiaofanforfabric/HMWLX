@@ -1,25 +1,74 @@
+buildscript {
+    repositories {
+        // 插件自身的依赖必须从官方源取：腾讯云 gradle-plugins 仓库不代理
+        // io.quarkus 的 devtools/bootstrap 构件，会 404。
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
 plugins {
-    id 'java'
+    id 'org.jetbrains.kotlin.jvm' version '2.3.20'
+    id 'org.jetbrains.compose' version '1.10.0'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.3.20'
+    id 'application'
+    // Quarkus 的构建期增强插件。
+    // headlessmc 的 jar 只有源码 class，真正的可执行体 (io.quarkus.runner.ApplicationImpl)
+    // 由 Quarkus 在构建时生成。没有这个插件，容器永远起不来。
+    id 'io.quarkus' version '3.40.1.1'
 }
 
 group = 'org.cn.xiaofan'
 version = '1.0-SNAPSHOT'
 
+// headlessmc 要求 JVM 25+
+def javaTarget = Integer.parseInt((findProperty('javaVersion') ?: '25').toString())
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(javaTarget.toString()))
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = javaTarget
+    options.encoding = 'UTF-8'
+}
+
 repositories {
-    // 腾讯云镜像优先，官方源兜底
+    // JitPack 放最前：headlessmc 及全部子模块只存在于 JitPack。
+    // 腾讯云镜像虽然也代理 jitpack，但存在两类问题：
+    //   1. 部分构件（如 headlessmc-auth-webview 的 pom）未缓存，返回 404
+    //   2. 高并发下超时，超时结果会被缓存成"未找到"
+    // 因此让 Gradle 先去真正的 JitPack，镜像只作兜底加速。
+    maven {
+        name = 'JitPack'
+        url = 'https://jitpack.io'
+    }
     maven {
         name = 'TencentCloud'
         url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
         allowInsecureProtocol = false
     }
-    maven {
-        name = 'TencentCloudGradlePlugin'
-        url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
-    }
     mavenCentral()
 }
 
 dependencies {
+    // headlessmc：Quarkus + CDI + Picocli 应用，进程内嵌入
+    // 0df01d2043 修掉了三处 CDI 代理冲突（否则进程内启动容器会抛
+    // IncompatibleClassChangeError：_ClientProxy 无法覆写 final 成员）：
+    //   1. DummyProgressBarService：final class + @ApplicationScoped（upstream #496 / PR #497）
+    //   2. JacksonVersionParser：@ApplicationScoped bean 自己声明的 final 实例方法
+    //   3. AbstractVersionService：非 bean 抽象基类里的 protected final 工厂方法，
+    //      被 PaperVersionService / PurpurVersionService 继承（必须扫继承链才查得到）
+    implementation 'com.github.xiaofanforfabric:headlessmc:0df01d2043'
+
+    // Compose Desktop UI
+    implementation compose.desktop.currentOs
+    implementation compose.material3
+    implementation compose.materialIconsExtended
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2"
+
     testImplementation platform('org.junit:junit-bom:6.0.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -27,4 +76,61 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    // 进程内启动 headlessmc 的 Quarkus 容器所需的两个构建产物：
+    //   1. generated-bytecode.jar   —— io.quarkus.runner.ApplicationImpl 与各 bean 的 _Bean/_ClientProxy
+    //   2. transformed-bytecode.jar —— Quarkus 在构建期改写过的类
+    //      例如 DefaultConfigFileProvider 被补了一个无参构造器 —— 因为
+    //      _ClientProxy 的构造器里硬编码了 `invokespecial super.<init>()V`。
+    //      缺少这个 jar 时会加载到 lib/main 里的原始类，触发
+    //      NoSuchMethodError: DefaultConfigFileProvider: method 'void <init>()' not found
+    //
+    // transformed-bytecode.jar 必须排在原始依赖之前，否则同名类仍会解析到未转换的版本。
+    classpath = files(layout.buildDirectory.file('quarkus-app/quarkus/transformed-bytecode.jar')) +
+        files(layout.buildDirectory.file('quarkus-app/quarkus/generated-bytecode.jar')) +
+        classpath
+    dependsOn 'quarkusBuild'
+}
+
+// Compose Desktop 运行入口。
+// 不走 Compose 的 hotRun（它要求 JetBrains JDK 21），而是用标准 JavaExec：
+// 直接用当前 JDK 25 启动，和 headlessmc 的运行时要求一致。
+application {
+    mainClass = 'org.cn.xiaofan.MainKt'
+}
+
+// application 插件的分发打包任务（distZip/distTar/installDist）与 Compose Desktop
+// 的打包方式冲突：Compose 的依赖树里有同名但不同内容的 jar（如
+// runtime-saveable-desktop 与 org.jetbrains.compose 的同名产物），
+// distTar/distZip 会因为 duplicate entry 直接失败。
+// HMYLX 用 Compose 自己的打包方式，因此禁用这几个任务。
+tasks.matching { it.name in ['distZip', 'distTar', 'installDist', 'startScripts'] }.configureEach {
+    enabled = false
+}
+
+// headlessmc 是 Quarkus 应用，运行时需要这些参数才能正常初始化
+tasks.named('run', JavaExec) {
+    // 与 test 任务相同：必须把 Quarkus 的两个构建产物放到 classpath 最前面。
+    //   transformed-bytecode.jar —— Quarkus 改写过的类（如给 bean 补无参构造器）
+    //   generated-bytecode.jar   —— io.quarkus.runner.ApplicationImpl 与 _Bean/_ClientProxy
+    // 缺任何一个，进程内启动 Quarkus 容器都会失败。
+    // 必须排在原始依赖之前，否则同名类会解析到未转换的版本。
+    dependsOn 'quarkusBuild'
+    classpath = files(layout.buildDirectory.file('quarkus-app/quarkus/transformed-bytecode.jar')) +
+        files(layout.buildDirectory.file('quarkus-app/quarkus/generated-bytecode.jar')) +
+        classpath
+
+    systemProperty 'java.awt.headless', 'false'
+    // Compose Desktop 在 Linux 上需要字体的渲染提示
+    jvmArgs '-Dskiko.renderApi=SOFTWARE'
+    // Quarkus 生成的 quarkus-run.jar 在 MANIFEST 里带了 Add-Opens，
+    // 但这里用 JavaExec 直接跑 classpath，绕过了 MANIFEST，必须手动补上。
+    // 缺了它，JDK 24+ 上 JBeret/Vert.x 用 thread-local-reset 时会抛
+    // IllegalAccessError: module java.base does not open java.lang to unnamed module
+    jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
+    jvmArgs '--add-opens', 'java.base/java.nio=ALL-UNNAMED'
+    jvmArgs '--add-opens', 'java.base/jdk.internal.misc=ALL-UNNAMED'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    // 让 Quarkus 的日志输出可见
+    standardOutput = System.out
+    errorOutput = System.err
 }
