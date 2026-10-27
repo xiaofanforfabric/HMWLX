@@ -45,4 +45,42 @@ object TextKey {
 
     /** 玩家头像的描述。`{0}` 为玩家名。 */
     const val ACCOUNT_AVATAR_DESCRIPTION = "account.avatar.description"
+
+    // --- 用户协议 ---
+
+    /** 协议标题。 */
+    const val AGREEMENT_TITLE = "agreement.title"
+
+    /** 协议版本号。`{0}` 为版本号。 */
+    const val AGREEMENT_VERSION = "agreement.version"
+
+    /** 提示用户向下滚动才能同意。 */
+    const val AGREEMENT_SCROLL_HINT = "agreement.scroll.hint"
+
+    /** 同意按钮。 */
+    const val AGREEMENT_ACCEPT = "agreement.accept"
+
+    /** 拒绝按钮。 */
+    const val AGREEMENT_DECLINE = "agreement.decline"
+
+    /** 未滚到底部时按钮的提示。 */
+    const val AGREEMENT_SCROLL_REQUIRED = "agreement.scroll.required"
+
+    /** 拒绝确认弹窗标题。 */
+    const val AGREEMENT_DECLINE_CONFIRM_TITLE = "agreement.decline.confirm.title"
+
+    /** 拒绝确认弹窗正文。 */
+    const val AGREEMENT_DECLINE_CONFIRM_BODY = "agreement.decline.confirm.body"
+
+    /** 拒绝确认弹窗的确认按钮。 */
+    const val AGREEMENT_DECLINE_CONFIRM_OK = "agreement.decline.confirm.ok"
+
+    /** 拒绝确认弹窗的取消按钮。 */
+    const val AGREEMENT_DECLINE_CONFIRM_CANCEL = "agreement.decline.confirm.cancel"
+
+    /** 用系统查看器打开协议。 */
+    const val AGREEMENT_OPEN_IN_BROWSER = "agreement.open.in.browser"
+
+    /** 协议页脚。 */
+    const val AGREEMENT_FOOTER = "agreement.footer"
 }
