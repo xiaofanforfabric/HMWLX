@@ -46,6 +46,41 @@ object TextKey {
     /** 玩家头像的描述。`{0}` 为玩家名。 */
     const val ACCOUNT_AVATAR_DESCRIPTION = "account.avatar.description"
 
+    // --- 账号切换 ---
+
+    /** 账号切换界面标题。 */
+    const val ACCOUNT_SWITCH_TITLE = "account.switch.title"
+
+    /** 返回按钮。 */
+    const val ACCOUNT_SWITCH_BACK = "account.switch.back"
+
+    /** 当前账号标记。 */
+    const val ACCOUNT_CURRENT = "account.current"
+
+    /** 分组标题：微软正版。 */
+    const val ACCOUNT_GROUP_MICROSOFT = "account.group.microsoft"
+
+    /** 分组标题：离线。 */
+    const val ACCOUNT_GROUP_OFFLINE = "account.group.offline"
+
+    /** 分组标题：外置登录。 */
+    const val ACCOUNT_GROUP_YGGDRASIL = "account.group.yggdrasil"
+
+    /** 分组为空时的提示。 */
+    const val ACCOUNT_GROUP_EMPTY = "account.group.empty"
+
+    /** 右侧登录区标题。 */
+    const val ACCOUNT_LOGIN_TITLE = "account.login.title"
+
+    /** 登录微软账号按钮。 */
+    const val ACCOUNT_LOGIN_MICROSOFT = "account.login.microsoft"
+
+    /** 登录离线账号按钮。 */
+    const val ACCOUNT_LOGIN_OFFLINE = "account.login.offline"
+
+    /** 登录第三方外置登录账号按钮。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL = "account.login.yggdrasil"
+
     // --- 用户协议 ---
 
     /** 开屏标题，如「请先阅读用户协议」。 */

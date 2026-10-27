@@ -3,6 +3,7 @@ package org.cn.xiaofan.ui.component
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -43,11 +44,17 @@ import org.cn.xiaofan.i18n.text
  *
  * 头像加载是异步的：加载完成前显示首字母占位，失败也回退到占位符，
  * 不会让界面卡住或出现空白。
+ *
+ * 整条都可点击：点击进入账号切换界面。用整条而不是只绑头像，
+ * 是因为头像只有 36dp，单独点它太小，用户很容易点空。
+ *
+ * @param onOpenSwitch 点击账号栏时触发，由调用方切换到账号界面
  */
 @Composable
 fun AccountBar(
     profile: AccountProfile,
     modifier: Modifier = Modifier,
+    onOpenSwitch: () -> Unit = {},
 ) {
     // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatarUrl）。
     // 若只按 uuid 记忆，同一账号的 avatarUrl 变化时（改配置后重启、或系统属性覆盖），
@@ -69,6 +76,7 @@ fun AccountBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(onClick = onOpenSwitch)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
