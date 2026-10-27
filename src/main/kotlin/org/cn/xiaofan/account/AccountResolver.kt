@@ -24,6 +24,9 @@ import org.cn.xiaofan.i18n.TextKey
  *   Blessed skin 站（如 littleskin、ely.by）都兼容这个路径。
  * - **离线**：headlessmc 的默认离线账号 UUID 是 Steve 的
  *   `22689332a7fd41919600b0fe1135ee34`，直接走 Mojang 接口即可拿到 Steve 头像。
+ *
+ * 头像来源解析不出来时返回 null（界面用首字母），[AvatarSource.Unavailable]
+ * 表示「确定没有」，两者都不发请求。
  */
 data class AccountProfile(
     /** 玩家名。 */
@@ -37,7 +40,7 @@ data class AccountProfile(
      *
      * - 网络地址：正版走 Mojang 会话服务，皮肤站走站点自己的纹理接口
      * - [AvatarSource.BuiltInSkin]：离线账号用内置皮肤，不发起任何网络请求
-     * - null：取不到，界面回退到首字母占位
+     * - null / [AvatarSource.Unavailable]：取不到，界面回退到首字母占位
      */
     val avatar: AvatarSource?,
 ) {
@@ -82,6 +85,15 @@ sealed interface AvatarSource {
      * @property url 可以是皮肤 PNG 直链，也可以是 Yggdrasil / Mojang 的 profile 接口
      */
     data class Remote(val url: String) : AvatarSource
+
+    /**
+     * 已知取不到头像，不必再发请求。
+     *
+     * 与 null 的区别只在语义：null 是「没配」，这里是「配了但确定没有」。
+     * 两者对界面都是首字母占位。留着这个分支是为了让「没有」这件事显式化，
+     * 而不是靠一个看不出原因的 null 去猜。
+     */
+    data object Unavailable : AvatarSource
 
     /**
      * 使用打进 jar 的内置皮肤。
@@ -180,6 +192,10 @@ object AccountResolver {
         AuthProvider.YGGDRASIL -> yggdrasilAvatarUrl(uuid)?.let { AvatarSource.Remote(it) }
         else -> null
     }
+
+    /** 仅供测试：按 provider 推导头像来源，钉死「正版一定有地址」这条不变式。 */
+    internal fun debugAvatarSource(provider: String, uuid: String): AvatarSource? =
+        avatarFor(provider, uuid)
 
     /**
      * 皮肤站头像。

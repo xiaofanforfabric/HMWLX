@@ -45,8 +45,11 @@ import org.cn.xiaofan.util.Browser
  * <p>请求设备码与等待授权都是有网络操作的阻塞调用，全部放在 IO 线程，
  * 界面只负责展示状态。
  *
- * @param onLoggedIn 登录成功，携带新账号
- * @param onDismiss 关闭对话框（不影响已经发起的登录，只是不再展示结果）
+ * <p>成功与失败都走 [onDismiss]：本对话框不负责切号，也不负责刷新账号列表，
+ * 那些在调用方做。它只上报结果、然后退场。
+ *
+ * @param onLoggedIn 登录成功，携带新账号。在 UI 线程回调，可以安全地改状态
+ * @param onDismiss 关闭对话框。登录成功后会被自动调用一次
  */
 @Composable
 fun MicrosoftLoginDialog(
@@ -56,21 +59,32 @@ fun MicrosoftLoginDialog(
     // null 表示还在申请设备码
     var verificationUrl by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var done by remember { mutableStateOf(false) }
     // 浏览器是否已经自动拉起过，避免重组时重复打开
     var browserOpened by remember { mutableStateOf(false) }
+    // 是否已成功。登录线程把结果抛回 UI 线程，对话框自己关掉。
+    //
+    // 曾经的做法是让调用方在 onLoggedIn 里把 showMicrosoftLogin 置 false ——
+    // 但那个回调是从 IO 线程上的登录线程里发出的，Compose 不会因为别的线程
+    // 改了 state 就取消正在运行的 LaunchedEffect，对话框留在原地转圈，
+    // 用户看不到「登录成功」，也看不到列表已经变了。
+    var succeeded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         // 整个登录流程是阻塞的，必须离开 UI 线程
         val result = withContext(Dispatchers.IO) {
             MicrosoftLogin.login { url ->
-                // 回调在 IO 线程上触发，交给 Compose 的状态更新即可
+                // 回调在 IO 线程上触发。只写状态，不在这里做任何事 ——
+                // 浏览器是交给下面那个 effect 去开的，保证只开一次。
                 verificationUrl = url
             }
         }
-        done = true
+        // 回到这里已经在 UI 线程：先收掉成功状态，再通知调用方，
+        // 两件事都在同一个线程上完成，顺序可预期。
         when (result) {
-            is LoginResult.Success -> onLoggedIn(result.profile)
+            is LoginResult.Success -> {
+                succeeded = true
+                onLoggedIn(result.profile)
+            }
             is LoginResult.Failed -> error = result.reason
         }
     }
@@ -84,8 +98,13 @@ fun MicrosoftLoginDialog(
         Browser.open(url)
     }
 
+    // 登录成功后自己关：调用方那边要切号、要刷新列表，对话框不该继续挂着
+    LaunchedEffect(succeeded) {
+        if (succeeded) onDismiss()
+    }
+
     AlertDialog(
-        onDismissRequest = { if (done) onDismiss() },
+        onDismissRequest = { if (succeeded || error != null) onDismiss() },
         title = { Text(text(TextKey.ACCOUNT_LOGIN_MICROSOFT)) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {

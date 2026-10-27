@@ -56,9 +56,12 @@ import org.cn.xiaofan.i18n.text
  * <p>布局：左侧是账号列表（头像 + 用户名 + 类型标签），右侧是三个登录入口。
  * 点击左侧任意一行即切换当前账号；右侧按钮用于新增账号。
  *
- * <p>当前只实现了离线账号的新增：微软与 Yggdrasil 的登录需要走
- * headlessmc 的 `Authenticator`（WebView / 浏览器回调），属于独立的登录流程，
- * 这里先把按钮摆出来并置灰，避免点了没反应。
+ * <p>已实现离线账号与微软正版登录（设备码流程）。Yggdrasil 外置登录还没接，
+ * 按钮保持置灰，避免点了没反应。
+ *
+ * <p>新增账号的收尾统一走 [onAccountAdded]：刷新列表、切到新账号、通知外层，
+ * 三条路径（离线、微软、以后的 Yggdrasil）共用一份逻辑，不会再出现
+ * 「登录成功了但列表没变」。
  *
  * @param current 当前使用的账号，用于高亮选中项
  * @param onSwitched 切换成功后的回调，由调用方刷新主界面
@@ -74,11 +77,33 @@ fun AccountSwitchScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var showAddOffline by remember { mutableStateOf(false) }
+    var showMicrosoftLogin by remember { mutableStateOf(false) }
     // 切换中：切号要写 headlessmc 的 lastUsedAccount 落盘，期间再点一次列表
     // 会并发写同一个文件，结果是两边都不生效。干脆挡住重复点击。
     var switching by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    var showMicrosoftLogin by remember { mutableStateOf(false) }
+
+    /**
+     * 新增账号（离线 / 微软）之后的收尾：刷新列表 → 把新账号设为当前 → 通知外面。
+     *
+     * 微软那边尤其不能省这一步：登录成功后 [MicrosoftLoginDialog] 只回调一行账号信息，
+     * 账号列表还是进界面时读的那份快照，用户会看到「登录成功了但列表里没有」。
+     */
+    fun onAccountAdded(created: AccountProfile, close: () -> Unit) {
+        close()
+        scope.launch {
+            if (AccountService.switchTo(created)) {
+                // 先切号再读列表：切换会写 lastUsedAccount 落盘，
+                // 顺序反过来的话列表里「当前」标记可能落后一拍。
+                groups = AccountService.groupedAccounts()
+                onSwitched(created)
+            } else {
+                // 切换失败也要刷新：账号已经写进存储了，列表得如实显示
+                groups = AccountService.groupedAccounts()
+                error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, created.name)
+            }
+        }
+    }
 
     // 读账号列表要读 headlessmc 的存储文件，交给 AccountService 自己切到 IO。
     LaunchedEffect(Unit) {
@@ -174,39 +199,19 @@ fun AccountSwitchScreen(
     }
 
     if (showAddOffline) {
+        // 新建后直接切过去：用户点了「添加离线账号」就是打算用它，
+        // 建完还得再点一次列表太啰嗦。
         AddOfflineAccountDialog(
-            onCreated = { created ->
-                showAddOffline = false
-                scope.launch {
-                    // 先刷新列表再切号：切换失败的提示会留在界面上，这时列表得是最新的
-                    groups = AccountService.groupedAccounts()
-                    // 新建后直接切过去：用户点了「添加离线账号」就是打算用它，
-                    // 建完还得再点一次列表太啰嗦。
-                    if (AccountService.switchTo(created)) {
-                        onSwitched(created)
-                    } else {
-                        error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, created.name)
-                    }
-                }
-            },
+            onCreated = { created -> onAccountAdded(created) { showAddOffline = false } },
             onDismiss = { showAddOffline = false },
         )
     }
 
     if (showMicrosoftLogin) {
         MicrosoftLoginDialog(
-            onLoggedIn = { loggedIn ->
-                showMicrosoftLogin = false
-                scope.launch {
-                    // 与离线账号新增一致：先刷新列表再切号
-                    groups = AccountService.groupedAccounts()
-                    if (AccountService.switchTo(loggedIn)) {
-                        onSwitched(loggedIn)
-                    } else {
-                        error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, loggedIn.name)
-                    }
-                }
-            },
+            onLoggedIn = { loggedIn -> onAccountAdded(loggedIn) { showMicrosoftLogin = false } },
+            // 这里的 onDismiss 只负责关闭。别顺手塞切号/刷新：它也会在用户点关闭时
+            // 触发，那时光是关个窗，不该产生任何副作用。
             onDismiss = { showMicrosoftLogin = false },
         )
     }

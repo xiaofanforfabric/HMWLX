@@ -31,6 +31,12 @@ class I18nTest {
             TextKey.SOURCE_MICROSOFT,
             TextKey.SOURCE_YGGDRASIL,
             TextKey.SOURCE_OFFLINE,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_REQUESTING,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_HINT,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_WAITING,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_REOPEN,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_CLOSE,
+            TextKey.ACCOUNT_LOGIN_MICROSOFT_FAILED,
         ).forEach { key ->
             val value = Messages.get(key)
             assertTrue(value.isNotBlank() && !value.startsWith("!"), "缺少文案: $key")
