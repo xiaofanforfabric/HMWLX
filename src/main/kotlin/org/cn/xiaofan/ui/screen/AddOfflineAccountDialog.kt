@@ -50,12 +50,16 @@ fun AddOfflineAccountDialog(
     // 打开即聚焦输入框，省掉一次点击
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    /** 当前输入是否明显不合法，仅用于给输入框标红 + 提示文字。 */
+    /**
+     * 当前输入是否明显不合法，仅用于给输入框标红 + 提示文字。
+     *
+     * 与 `AccountService.validateName` 保持相同的规则，但这里不拦输入，
+     * 只在用户还在打字时给出提示。
+     */
     val liveHint: String? = when {
         name.isEmpty() -> null
         name.length > 16 -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_TOO_LONG)
-        !NAME_PATTERN.matches(name) -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_INVALID_CHARS)
-        name.length < 3 -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_TOO_SHORT)
+        name.any { it.isIllegalNameChar() } -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_INVALID_CHARS)
         else -> null
     }
 
@@ -127,5 +131,6 @@ fun AddOfflineAccountDialog(
     )
 }
 
-/** 与 AccountService 里的规则保持一致：仅字母、数字、下划线。 */
-private val NAME_PATTERN = Regex("^[A-Za-z0-9_]+$")
+/** 与 AccountService 的规则保持一致：挡掉控制字符与格式字符，其余放行。 */
+private fun Char.isIllegalNameChar(): Boolean =
+    isISOControl() || Character.getType(this) == Character.FORMAT.toInt()

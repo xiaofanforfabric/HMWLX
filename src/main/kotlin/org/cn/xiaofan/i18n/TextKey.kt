@@ -92,9 +92,6 @@ object TextKey {
     /** 用户名输入框标签。 */
     const val ACCOUNT_ADD_OFFLINE_LABEL = "account.add.offline.label"
 
-    /** 用户名过短。 */
-    const val ACCOUNT_ADD_OFFLINE_TOO_SHORT = "account.add.offline.too.short"
-
     /** 用户名过长。 */
     const val ACCOUNT_ADD_OFFLINE_TOO_LONG = "account.add.offline.too.long"
 

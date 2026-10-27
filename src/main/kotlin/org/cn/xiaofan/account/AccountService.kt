@@ -161,22 +161,39 @@ object AccountService {
     /**
      * 校验离线账号的用户名。
      *
-     * 规则取自 Mojang 官方：3–16 个字符，仅允许 `A-Z a-z 0-9 _`。
-     * 原版服务端在离线模式下其实不做这个检查，但启动器层面拒掉可以省去后面
-     * 一堆「游戏里名字显示不出来」的诡异问题。
+     * 规则：
+     * - 长度 1–16（不能为空），按 [String.length]（UTF-16 code unit）计算。
+     *   Minecraft 协议的字符串长度上限就是这个算法，`Login Start` 的名字字段是
+     *   `String (16)`，所以上限与协议保持一致。emoji 等代理对占 2 个单位，
+     *   也是协议的算法，不是缺陷。
+     * - 字符集：除「控制字符与格式字符」外全部放行 —— 中文、日文、韩文、
+     *   emoji、符号都允许。原版服务端在离线模式下不做字符集校验，而协议本身
+     *   规定字符串是 UTF-8 编码的 Unicode，因此中文名在协议层是合法的。
+     *
+     * 放行中文是实际需求：部分服务器（如 2b2t.xin）明确要求离线玩家用中文名加入。
+     *
+     * 只挡两类字符，理由都是功能性的而非风格：
+     * - 控制字符（`Character.isISOControl`）：`\u0000` 之类会破坏协议字符串，
+     *   或让名字在界面上无法显示。
+     * - 格式字符（`Character.FORMAT`）：零宽字符、双向覆盖符等，肉眼不可见，
+     *   会让两个看起来一样的名字对应不同 UUID，属于典型的名字欺骗手段。
      *
      * @return 不合法时返回原因，合法时返回 null
      */
     private fun validateName(name: String): String? {
         if (name.isEmpty()) return "用户名不能为空"
-        if (name.length < 3) return "用户名至少 3 个字符"
         if (name.length > 16) return "用户名最多 16 个字符"
-        if (!NAME_PATTERN.matches(name)) return "只能包含字母、数字和下划线"
+
+        val bad = name.firstOrNull { it.isIllegalNameChar() }
+        if (bad != null) {
+            return "不能包含控制字符或不可见字符（U+%04X）".format(bad.code)
+        }
         return null
     }
 
-    /** 用户名允许的字符，与 Mojang 规则一致。 */
-    private val NAME_PATTERN = Regex("^[A-Za-z0-9_]+$")
+    /** 是否为不允许出现在用户名里的字符。 */
+    private fun Char.isIllegalNameChar(): Boolean =
+        isISOControl() || Character.getType(this) == Character.FORMAT.toInt()
 
     /**
      * 删除账号。
