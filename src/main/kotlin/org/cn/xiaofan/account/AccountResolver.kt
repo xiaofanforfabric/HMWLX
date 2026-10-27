@@ -44,6 +44,20 @@ data class AccountProfile(
     /** 头像的网络地址，内置皮肤或缺失时为 null。 */
     val avatarUrl: String? get() = (avatar as? AvatarSource.Remote)?.url
 
+    /**
+     * 头像的记忆键。
+     *
+     * 界面用它做 `remember` / `LaunchedEffect` 的 key，而**不能**直接用 [avatar]：
+     * [AvatarSource.BuiltInSkin.STEVE] 是所有离线账号共用的同一个实例，
+     * `data class` 的 `equals` 会把「小凡」和「小明」的头像判成相等，
+     * 于是切到另一个离线账号时 key 不变，头像状态不重置。
+     * 现在离线共用 Steve 所以看不出问题，但只要 [AvatarSource.BuiltInSkin]
+     * 多一个字段（比如按名字分配不同皮肤），这个 bug 就会当场现形。
+     *
+     * 身份 = provider + uuid：同一个账号才算同一张头像，与头像来源无关。
+     */
+    val avatarKey: String get() = "$provider:$uuid"
+
     /** 是否为离线账号。 */
     val isOffline: Boolean get() = provider == AuthProvider.OFFLINE
 

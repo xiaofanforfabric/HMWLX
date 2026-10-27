@@ -57,6 +57,9 @@ object TextKey {
     /** 当前账号标记。 */
     const val ACCOUNT_CURRENT = "account.current"
 
+    /** 切换账号失败。`{0}` 为用户名。 */
+    const val ACCOUNT_SWITCH_FAILED = "account.switch.failed"
+
     /** 分组标题：微软正版。 */
     const val ACCOUNT_GROUP_MICROSOFT = "account.group.microsoft"
 

@@ -2,7 +2,6 @@ package org.cn.xiaofan.account
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
-import java.util.UUID
 
 /**
  * 离线账号 UUID 算法的校验。
@@ -12,21 +11,13 @@ import java.util.UUID
  * 这个值必须和原版服务端算出来的一致，否则同一个玩家在不同环境里
  * 会得到两个 UUID，服务器白名单、领地数据之类全部对不上。
  *
- * <p>算法本身在 `AccountService` 里是 private，这里用同样的实现做交叉验证：
- * 断言固定输入得到固定输出。若哪天有人改了实现，这个测试会红。
+ * <p>直接调 `AccountService.offlineUuid`（`internal`，测试同模块可见），
+ * 而不是在测试里复制一份实现：副本本身就是最容易被连生产代码一起改掉的东西，
+ * 那样「交叉验证」等于对着自己验自己，什么都验不出来。
  */
 class OfflineUuidTest {
 
-    /**
-     * 用与 `AccountService.offlineUuid` 相同的算法。
-     *
-     * 不直接调 private 方法：为了测试而放宽可见性，会让生产代码多出一个
-     * 不该公开的入口。这里宁可重复四行。
-     */
-    private fun offlineUuid(name: String): String =
-        UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
-            .toString()
-            .replace("-", "")
+    private fun offlineUuid(name: String): String = AccountService.offlineUuid(name)
 
     @Test
     fun `已知玩家的离线 UUID 稳定`() {

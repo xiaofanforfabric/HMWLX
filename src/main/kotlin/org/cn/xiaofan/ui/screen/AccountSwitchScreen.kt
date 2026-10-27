@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,10 +41,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountService
 import org.cn.xiaofan.account.AvatarLoader
 import org.cn.xiaofan.account.sourceLabel
+import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 
@@ -71,17 +74,30 @@ fun AccountSwitchScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var showAddOffline by remember { mutableStateOf(false) }
+    // 切换中：切号要写 headlessmc 的 lastUsedAccount 落盘，期间再点一次列表
+    // 会并发写同一个文件，结果是两边都不生效。干脆挡住重复点击。
+    var switching by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    // 读账号列表是 IO 操作（要读 headlessmc 的存储文件），
-    // 但这里数据量很小、又在容器已就绪之后，直接在主线程读不会造成可感知的卡顿。
+    // 读账号列表要读 headlessmc 的存储文件，交给 AccountService 自己切到 IO。
     LaunchedEffect(Unit) {
         groups = AccountService.groupedAccounts()
         loading = false
     }
 
-    /** 重新拉一次列表 —— 新增/删除账号后都要调用。 */
-    fun reloadGroups() {
-        groups = AccountService.groupedAccounts()
+    /** 切到指定账号；成功时回调出去，失败把原因留在界面上。 */
+    fun switchTo(profile: AccountProfile, onSuccess: () -> Unit) {
+        if (switching) return
+        switching = true
+        error = null
+        scope.launch {
+            if (AccountService.switchTo(profile)) {
+                onSuccess()
+            } else {
+                error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, profile.name)
+            }
+            switching = false
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -100,13 +116,8 @@ fun AccountSwitchScreen(
                         else -> AccountList(
                             groups = groups,
                             current = current,
-                            onSelect = { profile ->
-                                if (AccountService.switchTo(profile)) {
-                                    onSwitched(profile)
-                                } else {
-                                    error = "切换账号失败：${profile.name}"
-                                }
-                            },
+                            enabled = !switching,
+                            onSelect = { profile -> switchTo(profile) { onSwitched(profile) } },
                         )
                     }
                 }
@@ -166,13 +177,16 @@ fun AccountSwitchScreen(
         AddOfflineAccountDialog(
             onCreated = { created ->
                 showAddOffline = false
-                reloadGroups()
-                // 新建后直接切过去：用户点了「添加离线账号」就是打算用它，
-                // 建完还得再点一次列表太啰嗦。
-                if (AccountService.switchTo(created)) {
-                    onSwitched(created)
-                } else {
-                    error = "账号已创建，但切换失败：${created.name}"
+                scope.launch {
+                    // 先刷新列表再切号：切换失败的提示会留在界面上，这时列表得是最新的
+                    groups = AccountService.groupedAccounts()
+                    // 新建后直接切过去：用户点了「添加离线账号」就是打算用它，
+                    // 建完还得再点一次列表太啰嗦。
+                    if (AccountService.switchTo(created)) {
+                        onSwitched(created)
+                    } else {
+                        error = Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, created.name)
+                    }
                 }
             },
             onDismiss = { showAddOffline = false },
@@ -202,6 +216,7 @@ private fun ScreenHeader(onClose: () -> Unit) {
 private fun AccountList(
     groups: Map<AccountService.AccountGroup, List<AccountProfile>>,
     current: AccountProfile,
+    enabled: Boolean,
     onSelect: (AccountProfile) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -226,6 +241,7 @@ private fun AccountList(
                     AccountRow(
                         profile = profile,
                         selected = profile.name == current.name && profile.provider == current.provider,
+                        enabled = enabled,
                         onClick = { onSelect(profile) },
                     )
                 }
@@ -248,6 +264,7 @@ private fun GroupHeader(group: AccountService.AccountGroup, count: Int) {
 private fun AccountRow(
     profile: AccountProfile,
     selected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer
@@ -258,7 +275,7 @@ private fun AccountRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(bg)
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -292,9 +309,11 @@ private fun AccountRow(
 
 @Composable
 private fun RowAvatar(profile: AccountProfile) {
-    var avatar by remember(profile.uuid, profile.avatar) { mutableStateOf<ImageBitmap?>(null) }
+    // key 用 avatarKey（provider + uuid），不用 avatar：后者对离线账号是共用单例，
+    // 换了账号 key 却不变，这一行复用时会把上一个账号的头像留在原地。
+    var avatar by remember(profile.avatarKey) { mutableStateOf<ImageBitmap?>(null) }
 
-    LaunchedEffect(profile.uuid, profile.avatar) {
+    LaunchedEffect(profile.avatarKey) {
         avatar = null
         avatar = AvatarLoader.load(profile.avatar)
     }

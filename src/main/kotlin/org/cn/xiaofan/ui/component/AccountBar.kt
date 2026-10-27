@@ -56,14 +56,14 @@ fun AccountBar(
     modifier: Modifier = Modifier,
     onOpenSwitch: () -> Unit = {},
 ) {
-    // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatar）。
-    // 若只按 uuid 记忆，同一账号的 avatar 变化时（改配置后重启、或系统属性覆盖），
-    // 状态不会重置，上一张头像会残留在界面上。
-    var avatar by remember(profile.uuid, profile.avatar) {
+    // key 必须与下面的 LaunchedEffect 完全一致，都用 avatarKey（provider + uuid）。
+    // 不用 avatar 本身：离线账号的 BuiltInSkin.STEVE 是共用单例，「小凡」与「小明」
+    // 的 avatar 相等，换号时 key 不变，上一张头像会留在界面上。
+    var avatar by remember(profile.avatarKey) {
         mutableStateOf<ImageBitmap?>(null)
     }
 
-    LaunchedEffect(profile.uuid, profile.avatar) {
+    LaunchedEffect(profile.avatarKey) {
         // 先清空再加载：避免来源切换后新旧图混在一起
         avatar = null
         avatar = AvatarLoader.load(profile.avatar)

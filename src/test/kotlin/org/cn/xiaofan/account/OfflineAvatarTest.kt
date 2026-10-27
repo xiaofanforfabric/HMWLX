@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.util.UUID
 
 /**
  * 离线账号头像来源的测试。
@@ -66,9 +65,30 @@ class OfflineAvatarTest {
         )
     }
 
-    /** 与 `AccountService.offlineUuid` 相同的算法。 */
-    private fun offlineUuid(name: String): String =
-        UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
-            .toString()
-            .replace("-", "")
+    @Test
+    fun `不同离线账号的头像记忆键不同`() {
+        // 回归：头像组件原先用 avatar 本身做 remember 的 key，而离线账号的
+        // BuiltInSkin.STEVE 是共用单例，equals 相等 -> key 不变 -> 切号后
+        // 上一张头像留在原地。key 必须按账号身份来分。
+        val a = AccountResolver.fromAccount("小凡", AuthProvider.OFFLINE, offlineUuid("小凡"))
+        val b = AccountResolver.fromAccount("小明", AuthProvider.OFFLINE, offlineUuid("小明"))
+
+        assertEquals(a.avatar, b.avatar, "前提：离线账号目前共用同一个内置皮肤实例")
+        assertEquals(
+            false,
+            a.avatarKey == b.avatarKey,
+            "两个离线账号的头像记忆键必须不同，否则切号会串图",
+        )
+    }
+
+    @Test
+    fun `同一账号的头像记忆键稳定`() {
+        val uuid = offlineUuid("小凡")
+        val first = AccountResolver.fromAccount("小凡", AuthProvider.OFFLINE, uuid)
+        val second = AccountResolver.fromAccount("小凡", AuthProvider.OFFLINE, uuid)
+
+        assertEquals(first.avatarKey, second.avatarKey, "同一账号重建 Profile 后 key 不能变")
+    }
+
+    private fun offlineUuid(name: String): String = AccountService.offlineUuid(name)
 }

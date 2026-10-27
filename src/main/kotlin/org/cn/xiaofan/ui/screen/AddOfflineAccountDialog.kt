@@ -14,11 +14,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountService
 import org.cn.xiaofan.account.OfflineAccountResult
@@ -46,6 +48,7 @@ fun AddOfflineAccountDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
 
     // 打开即聚焦输入框，省掉一次点击
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -53,15 +56,11 @@ fun AddOfflineAccountDialog(
     /**
      * 当前输入是否明显不合法，仅用于给输入框标红 + 提示文字。
      *
-     * 与 `AccountService.validateName` 保持相同的规则，但这里不拦输入，
-     * 只在用户还在打字时给出提示。
+     * 规则直接问 [AccountService.validateName]，不再在这里抄一份：抄一份的结果就是
+     * 两边慢慢漂移，用户看到「可以用」但点确定被拒，或者反过来。
+     * 这里只是不拦输入——让用户可以继续打字，而不是每按一个键就被弹回来的错误打断。
      */
-    val liveHint: String? = when {
-        name.isEmpty() -> null
-        name.length > 16 -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_TOO_LONG)
-        name.any { it.isIllegalNameChar() } -> Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_INVALID_CHARS)
-        else -> null
-    }
+    val liveHint: String? = name.takeIf { it.isNotEmpty() }?.let { AccountService.validateName(it) }
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
@@ -106,17 +105,25 @@ fun AddOfflineAccountDialog(
             TextButton(
                 enabled = !submitting && name.isNotBlank(),
                 onClick = {
+                    // 必须离开主线程：addOfflineAccount 里的 AuthStore.add() 是落盘写 JSON，
+                    // 同步跑会让整窗冻结，submitting 也来不及触发重组。
                     submitting = true
-                    when (val result = AccountService.addOfflineAccount(name)) {
-                        is OfflineAccountResult.Success -> onCreated(result.profile)
-                        is OfflineAccountResult.InvalidName -> {
-                            error = result.reason
-                            submitting = false
+                    scope.launch {
+                        when (val result = AccountService.addOfflineAccount(name)) {
+                            is OfflineAccountResult.Success -> onCreated(result.profile)
+                            is OfflineAccountResult.InvalidName -> {
+                                error = result.reason
+                                submitting = false
+                            }
+                            is OfflineAccountResult.DuplicateName -> {
+                                error = Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_DUPLICATE, result.name)
+                                submitting = false
+                            }
+                            is OfflineAccountResult.Failed -> {
+                                error = Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_FAILED, result.reason)
+                                submitting = false
+                            }
                         }
-                        is OfflineAccountResult.DuplicateName ->
-                            error = Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_DUPLICATE, result.name)
-                        is OfflineAccountResult.Failed ->
-                            error = Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_FAILED, result.reason)
                     }
                 },
             ) {
@@ -130,7 +137,3 @@ fun AddOfflineAccountDialog(
         },
     )
 }
-
-/** 与 AccountService 的规则保持一致：挡掉控制字符与格式字符，其余放行。 */
-private fun Char.isIllegalNameChar(): Boolean =
-    isISOControl() || Character.getType(this) == Character.FORMAT.toInt()

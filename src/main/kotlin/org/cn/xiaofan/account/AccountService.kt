@@ -7,6 +7,8 @@ import io.github.headlesshq.headlessmc.auth.AuthStore
 import io.github.headlesshq.headlessmc.auth.LastUsedAccountService
 import io.github.headlesshq.headlessmc.auth.cdi.Offline
 import jakarta.enterprise.util.TypeLiteral
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import java.lang.reflect.Proxy
 import java.util.UUID
@@ -21,6 +23,12 @@ import java.util.UUID
  * <p>不自己维护账号列表：headlessmc 的 `AuthProvider` 已经把账号持久化到它自己的
  * 存储里，重复维护一份必然两边不同步。增加账号走 `AuthProvider.getAuthStore().add()`，
  * 切换走 `LastUsedAccountService.setLastUsedAccount()`，都是它的官方接口。
+ *
+ * <p>**读写一律是 `suspend` + [Dispatchers.IO]**：这几个操作看着是内存操作，实际
+ * 全都要读 / 写 headlessmc 存在磁盘上的 JSON。放在 Compose 主线程上调用会让整个
+ * 窗口冻结几十到上百毫秒，且恰好发生在用户点击的瞬间。接口做成 suspend 而不是
+ * 内部自己 `launch`，是为了让调用方拿到真实结果（失败要提示、创建后要切号），
+ * 也让「正在提交」这类 UI 状态能正确落到重组上。
  */
 object AccountService {
 
@@ -57,7 +65,7 @@ object AccountService {
      * 容器未就绪或读取失败时返回空分组，不抛异常 —— 界面要能正常显示「无账号」，
      * 而不是崩掉。
      */
-    fun groupedAccounts(): Map<AccountGroup, List<AccountProfile>> {
+    suspend fun groupedAccounts(): Map<AccountGroup, List<AccountProfile>> = withContext(Dispatchers.IO) {
         val accounts = runCatching {
             HeadlessMcBootstrap.bean(AuthService::class.java).accounts
         }.getOrElse { emptyList() }
@@ -68,7 +76,7 @@ object AccountService {
         AccountGroup.entries.forEach { group ->
             result[group] = profiles.filter { AccountGroup.from(it.provider) == group }
         }
-        return result
+        result
     }
 
     /**
@@ -80,18 +88,18 @@ object AccountService {
      * 读不到时回退到列表第一个，再回退到默认离线账号（Steve）——
      * 与 headlessmc 自己的行为一致。
      */
-    fun currentAccount(): AccountProfile {
+    suspend fun currentAccount(): AccountProfile = withContext(Dispatchers.IO) {
         runCatching {
             HeadlessMcBootstrap.bean(LastUsedAccountService::class.java)
                 .lastUsedAccount
                 .orElse(null)
-        }.getOrNull()?.let { return it.toProfile() }
+        }.getOrNull()?.let { return@withContext it.toProfile() }
 
         runCatching {
             HeadlessMcBootstrap.bean(AuthService::class.java).accounts.firstOrNull()
-        }.getOrNull()?.let { return it.toProfile() }
+        }.getOrNull()?.let { return@withContext it.toProfile() }
 
-        return Account.defaultOfflineAccount().toProfile()
+        Account.defaultOfflineAccount().toProfile()
     }
 
     /**
@@ -101,12 +109,14 @@ object AccountService {
      *
      * @return 是否切换成功。失败时界面应提示，不能假装成功。
      */
-    fun switchTo(profile: AccountProfile): Boolean = runCatching {
-        val service = HeadlessMcBootstrap.bean(LastUsedAccountService::class.java)
-        val account = findRaw(profile) ?: error("账号不存在: ${profile.name}")
-        service.setLastUsedAccount(account)
-        true
-    }.getOrDefault(false)
+    suspend fun switchTo(profile: AccountProfile): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val service = HeadlessMcBootstrap.bean(LastUsedAccountService::class.java)
+            val account = findRaw(profile) ?: error("账号不存在: ${profile.name}")
+            service.setLastUsedAccount(account)
+            true
+        }.getOrDefault(false)
+    }
 
     /**
      * 新增离线账号。
@@ -120,10 +130,10 @@ object AccountService {
      *
      * @return 成功时返回新建账号；失败时返回带原因的错误
      */
-    fun addOfflineAccount(name: String): OfflineAccountResult {
+    suspend fun addOfflineAccount(name: String): OfflineAccountResult = withContext(Dispatchers.IO) {
         val trimmed = name.trim()
 
-        validateName(trimmed)?.let { return OfflineAccountResult.InvalidName(it) }
+        validateName(trimmed)?.let { return@withContext OfflineAccountResult.InvalidName(it) }
 
         // 重名直接拒绝：headlessmc 的 AuthStore 以名字为键，同名会覆盖已有账号，
         // 用户的旧 UUID 会悄悄丢掉。反过来说，同名账号的 UUID 本来就一样，
@@ -131,9 +141,9 @@ object AccountService {
         val exists = groupedAccounts()[AccountGroup.OFFLINE]
             .orEmpty()
             .any { it.name.equals(trimmed, ignoreCase = true) }
-        if (exists) return OfflineAccountResult.DuplicateName(trimmed)
+        if (exists) return@withContext OfflineAccountResult.DuplicateName(trimmed)
 
-        return runCatching {
+        runCatching {
             val uuid = offlineUuid(trimmed)
             val account = Account(
                 AuthProvider.OFFLINE,  // provider
@@ -225,9 +235,12 @@ object AccountService {
      * - 格式字符（`Character.FORMAT`）：零宽字符、双向覆盖符等，肉眼不可见，
      *   会让两个看起来一样的名字对应不同 UUID，属于典型的名字欺骗手段。
      *
+     * 可见性为 `internal` 而不是 `private`：界面要拿它做输入时的实时提示、测试要拿它
+     * 断言规则本身。让它们各抄一份规则，才是真正会漂移的地方。
+     *
      * @return 不合法时返回原因，合法时返回 null
      */
-    private fun validateName(name: String): String? {
+    internal fun validateName(name: String): String? {
         if (name.isEmpty()) return "用户名不能为空"
         if (name.length > 16) return "用户名最多 16 个字符"
 
@@ -247,15 +260,17 @@ object AccountService {
      *
      * @return 是否删除成功
      */
-    fun removeAccount(profile: AccountProfile): Boolean = runCatching {
-        val account = findRaw(profile) ?: error("账号不存在: ${profile.name}")
-        val provider = HeadlessMcBootstrap.bean(AuthService::class.java)
-            .getProvider(profile.provider)
-            .orElse(null)
-            ?: error("找不到认证源: ${profile.provider}")
-        provider.removeAccount(account)
-        true
-    }.getOrDefault(false)
+    suspend fun removeAccount(profile: AccountProfile): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val account = findRaw(profile) ?: error("账号不存在: ${profile.name}")
+            val provider = HeadlessMcBootstrap.bean(AuthService::class.java)
+                .getProvider(profile.provider)
+                .orElse(null)
+                ?: error("找不到认证源: ${profile.provider}")
+            provider.removeAccount(account)
+            true
+        }.getOrDefault(false)
+    }
 
     /**
      * 把界面持有的 [AccountProfile] 换回 headlessmc 的 [Account]。
@@ -269,8 +284,13 @@ object AccountService {
             .firstOrNull { it.name == profile.name && it.provider == profile.provider }
     }.getOrNull()
 
-    /** 离线模式的 UUID 算法，与 Minecraft 服务端一致。 */
-    private fun offlineUuid(name: String): String =
+    /**
+     * 离线模式的 UUID 算法，与 Minecraft 服务端一致。
+     *
+     * 与 [validateName] 同理，`internal` 是为了让测试直接校验这个算法，
+     * 而不是复制一份到测试里「交叉验证」—— 副本跟着改掉的时候，交叉验证等于零。
+     */
+    internal fun offlineUuid(name: String): String =
         UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
             .toString()
             .replace("-", "")

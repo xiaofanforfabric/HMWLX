@@ -2,6 +2,7 @@ package org.cn.xiaofan.account
 
 import io.github.headlesshq.headlessmc.auth.Account
 import io.github.headlesshq.headlessmc.auth.AuthStore
+import kotlinx.coroutines.runBlocking
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -39,7 +40,7 @@ class OfflineAccountStoreTest {
     }
 
     @Test
-    fun `groupedAccounts 能读出离线分组`() {
+    fun `groupedAccounts 能读出离线分组`() = runBlocking {
         HeadlessMcBootstrap.start()
 
         val groups = AccountService.groupedAccounts()
@@ -48,5 +49,31 @@ class OfflineAccountStoreTest {
             "分组结果里必须有 OFFLINE 这一组（即使为空）",
         )
         println("=== 账号分组: ${groups.mapValues { it.value.size }} ===")
+    }
+
+    /**
+     * 账号读写涉及磁盘，必须都挂在 [kotlinx.coroutines.Dispatchers.IO] 上。
+     *
+     * 用反射钉死签名：这些方法一旦退回普通 `fun`，界面就又能从主线程直接调，
+     * 编译期不会有任何提示，只有用户能感觉到窗口卡一下。
+     */
+    @Test
+    fun `账号读写接口必须都是 suspend`() {
+        listOf(
+            "groupedAccounts",
+            "currentAccount",
+            "switchTo",
+            "addOfflineAccount",
+            "removeAccount",
+        ).forEach { name ->
+            val method = AccountService::class.java.methods.firstOrNull { m ->
+                m.name == name && m.isSynthetic.not()
+            } ?: error("找不到方法 $name")
+            val parameterTypes = method.parameterTypes
+            assertTrue(
+                parameterTypes.lastOrNull()?.name == "kotlin.coroutines.Continuation",
+                "$name 必须是 suspend 函数，否则又会被主线程同步调用",
+            )
+        }
     }
 }

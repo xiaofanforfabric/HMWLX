@@ -15,21 +15,20 @@ import org.junit.jupiter.api.Test
  * <p>放行中文是实际需求：部分服务器（如 2b2t.xin）明确要求离线玩家用中文名加入。
  * 不设字符数下限，单字英文名与单字中文名都是有效名字。
  *
- * <p>校验逻辑在 `AccountService` 里是 private，这里复制同一份规则做交叉验证 ——
- * 目的是把规则本身钉死，避免日后被不经意收紧。
+ * <p>直接调 `AccountService.validateName`（`internal`，测试同模块可见）：规则只有一份，
+ * 改了实现这里立刻会红。之前测试里复制一份副本「交叉验证」，实际上只是对着自己验自己，
+ * 副本被一起改掉时测试依然是绿的。
  */
 class OfflineAccountNameTest {
 
-    /** 与 `AccountService.validateName` 相同的规则。 */
-    private fun validate(name: String): String? {
-        if (name.isEmpty()) return "empty"
-        if (name.length > 16) return "too_long"
-        if (name.any { it.isIllegal() }) return "invalid_chars"
-        return null
-    }
-
-    private fun Char.isIllegal(): Boolean =
-        isISOControl() || Character.getType(this) == Character.FORMAT.toInt()
+    /** 把生产代码返回的原因归一成断言用的短标签。 */
+    private fun validate(name: String): String? =
+        when (AccountService.validateName(name)) {
+            null -> null
+            "用户名不能为空" -> "empty"
+            "用户名最多 16 个字符" -> "too_long"
+            else -> "invalid_chars"
+        }
 
     @Test
     fun `英文用户名通过`() {
