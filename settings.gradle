@@ -1,4 +1,11 @@
-// 插件仓库与依赖仓库都走腾讯云镜像（放在最前面，避免先打官方仓库）
+// 插件仓库与依赖仓库都走腾讯云镜像。
+//
+// 注意仓库顺序：gradle-plugins 必须排在最前。
+// 因为 Gradle 插件的 marker 构件（形如 org.jetbrains.kotlin.jvm.gradle.plugin）
+// 在 maven-public 上并不完整 —— 例如 io.quarkus.gradle.plugin 在 maven-public 是 404，
+// 只有腾讯云的 gradle-plugins 仓库同时代理了全部插件 marker。
+// 若 maven-public 排在前面，Gradle 会 404 后继续往 gradlePluginPortal / mavenCentral 找，
+// 在 CI 环境（如 CNB 构建机）会撞上 Maven Central 的 429 Too Many Requests。
 pluginManagement {
     repositories {
         maven {
@@ -10,7 +17,6 @@ pluginManagement {
             url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
         }
         gradlePluginPortal()
-        mavenCentral()
     }
 }
 
