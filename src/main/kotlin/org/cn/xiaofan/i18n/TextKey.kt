@@ -78,6 +78,24 @@ object TextKey {
     /** 登录微软账号按钮。 */
     const val ACCOUNT_LOGIN_MICROSOFT = "account.login.microsoft"
 
+    /** 微软登录：正在向微软申请设备码。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_REQUESTING = "account.login.microsoft.requesting"
+
+    /** 微软登录：提示用户打开链接完成授权。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_HINT = "account.login.microsoft.hint"
+
+    /** 微软登录：等待用户完成授权。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_WAITING = "account.login.microsoft.waiting"
+
+    /** 微软登录：重新打开浏览器按钮。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_REOPEN = "account.login.microsoft.reopen"
+
+    /** 微软登录：关闭按钮。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_CLOSE = "account.login.microsoft.close"
+
+    /** 微软登录失败。`{0}` 为原因。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_FAILED = "account.login.microsoft.failed"
+
     /** 登录离线账号按钮。 */
     const val ACCOUNT_LOGIN_OFFLINE = "account.login.offline"
 

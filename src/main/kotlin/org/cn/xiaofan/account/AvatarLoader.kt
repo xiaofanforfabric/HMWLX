@@ -22,7 +22,11 @@ import java.util.regex.Pattern
  *    URL 返回的是 JSON，皮肤地址藏在 base64 编码的 `textures` 字段里。
  *    需要先解析 JSON → base64 解码 → 再取 `SKIN.url`。
  *
- * 判定方式：路径含 `sessionserver/session/minecraft/profile` 的视为 Yggdrasil 接口。
+ * 判定方式：路径含 `session/minecraft/profile`（前面可带可选的 `sessionserver/`）
+ * 的视为 profile 接口 —— Mojang 与皮肤站两家都命中，见 [PROFILE_ENDPOINT]。
+ *
+ * 失败时返回 null，由界面回退到首字母占位。失败原因打到 stderr：
+ * 「没皮肤」（204/404）静默，「被限流」（429）等真失败会留一行。
  */
 object AvatarLoader {
 
@@ -34,9 +38,23 @@ object AvatarLoader {
     /** 网络超时（毫秒）。头像加载失败不应阻塞界面。 */
     private const val TIMEOUT_MS = 8000
 
-    /** 识别 Yggdrasil profile 接口。 */
+    /** Mojang 在短时间内重复请求时会返回这个状态码。 */
+    private const val HTTP_TOO_MANY_REQUESTS = 429
+
+    /**
+     * 识别 profile 接口（返回 JSON，需要两步解析）。
+     *
+     * 两家的路径不同，必须都覆盖：
+     * - Mojang 官方：`sessionserver.mojang.com/session/minecraft/profile/<uuid>`
+     *   —— 注意路径里**没有** `sessionserver` 这一段，域名里才有
+     * - Yggdrasil 皮肤站：`<站点>/api/yggdrasil/sessionserver/session/minecraft/profile/<uuid>`
+     *   —— 路径里多一层 `sessionserver`
+     *
+     * 早期只写了后者的形式，导致正版账号的 JSON 被当成 PNG 去解码，
+     * 报 `Failed to Image::makeFromEncoded`，头像退化成首字母。
+     */
     private val PROFILE_ENDPOINT =
-        Pattern.compile(".*/sessionserver/session/minecraft/profile/.*")
+        Pattern.compile(".*/(sessionserver/)?session/minecraft/profile/.*")
 
     /**
      * 从 profile JSON 里提取 base64 的 textures 字段。
@@ -70,7 +88,7 @@ object AvatarLoader {
      */
     suspend fun load(source: AvatarSource?): ImageBitmap? = withContext(Dispatchers.IO) {
         when (source) {
-            null -> null
+            null, AvatarSource.Unavailable -> null
             is AvatarSource.BuiltInSkin -> loadBuiltIn(source.resourcePath)
             is AvatarSource.Remote -> loadRemote(source.url)
         }
@@ -92,19 +110,19 @@ object AvatarLoader {
 
     /** 从网络加载皮肤并裁出头部。 */
     private fun loadRemote(url: String): ImageBitmap? {
+        var failure: String? = null
         return try {
             val skinBytes = if (PROFILE_ENDPOINT.matcher(url).matches()) {
                 // 两步：profile JSON → 皮肤地址 → 下载皮肤
-                val profileJson = downloadBytes(url)?.toString(Charsets.UTF_8)
-                    ?: return null
-                val skinUrl = resolveSkinUrl(profileJson) ?: run {
-                    System.err.println("[Avatar] 未能从 profile 解析出 SKIN.url: $url")
-                    return null
-                }
-                downloadBytes(skinUrl)
+                // null 有两种：没有皮肤（204/404）或真失败，后者已写进 failure
+                val profileJson = downloadBytes(url) { failure = it }?.toString(Charsets.UTF_8)
+                    ?: return failOrNot(failure)
+                // 没配皮肤：Mojang 对「没换过皮肤」的账号就是这么返回的，不算失败
+                val skinUrl = resolveSkinUrl(profileJson) ?: return null
+                downloadBytes(skinUrl) { failure = it }
             } else {
-                downloadBytes(url)
-            } ?: return null
+                downloadBytes(url) { failure = it }
+            } ?: return failOrNot(failure)
 
             val skin = Image.makeFromEncoded(skinBytes).toComposeImageBitmap()
             cropHead(skin)
@@ -114,6 +132,30 @@ object AvatarLoader {
             null
         }
     }
+
+    /**
+     * 失败原因要不要往上报。
+     *
+     * 没有原因就是「这账号本来就没皮肤」（接口 204 / 404），正常情况，静默返回 null；
+     * 有原因说明是真失败（429、超时、403），打一行日志再返回 null。
+     * 两种情况对界面来说都是「没有头像」，区别只在控制台。
+     */
+    private fun failOrNot(reason: String?): ImageBitmap? {
+        if (reason != null) System.err.println("[Avatar] $reason")
+        return null
+    }
+
+    /**
+     * 仅供测试：暴露 profile JSON 的皮肤地址解析。
+     *
+     * 解析逻辑是头像链路里最容易出错的一环（字段顺序、base64、嵌套结构），
+     * 用真实返回体测它比测 URL 字符串有意义得多。
+     */
+    internal fun debugResolveSkinUrl(profileJson: String): String? = resolveSkinUrl(profileJson)
+
+    /** 仅供测试：判定一个 URL 是否走两步解析。 */
+    internal fun debugIsProfileEndpoint(url: String): Boolean =
+        PROFILE_ENDPOINT.matcher(url).matches()
 
     /**
      * 从 Yggdrasil profile JSON 里解析皮肤地址。
@@ -144,7 +186,13 @@ object AvatarLoader {
         return if (skinMatcher.find()) skinMatcher.group(1) else null
     }
 
-    private fun downloadBytes(url: String): ByteArray? {
+    /**
+     * 下载字节，失败时返回 null。
+     *
+     * 失败原因通过 [onFailure] 回调交给调用方：仅凭「返回 null」无法区分
+     * 404（这账号没皮肤，正常）、429（请求太快，等一下就好）和 403（UA 被拦）。
+     */
+    private fun downloadBytes(url: String, onFailure: (String) -> Unit): ByteArray? {
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = TIMEOUT_MS
         connection.readTimeout = TIMEOUT_MS
@@ -152,8 +200,26 @@ object AvatarLoader {
         // Mojang 与部分皮肤站对 UA 有校验，缺失可能返回 403
         connection.setRequestProperty("User-Agent", "HMWLX/1.0")
         return try {
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) null
-            else connection.inputStream.use { it.readBytes() }
+            val code = connection.responseCode
+            when {
+                code == HttpURLConnection.HTTP_OK -> connection.inputStream.use { it.readBytes() }
+
+                code == HTTP_TOO_MANY_REQUESTS -> {
+                    onFailure("请求过于频繁（429），稍后重试: $url")
+                    null
+                }
+
+                // 204 / 404：Mojang 对没有皮肤的账号就是这么回的，不是错误
+                code == HttpURLConnection.HTTP_NO_CONTENT || code == HttpURLConnection.HTTP_NOT_FOUND -> null
+
+                else -> {
+                    onFailure("HTTP $code: $url")
+                    null
+                }
+            }
+        } catch (t: Throwable) {
+            onFailure("下载失败 ${t.javaClass.simpleName}: ${t.message}")
+            null
         } finally {
             connection.disconnect()
         }
