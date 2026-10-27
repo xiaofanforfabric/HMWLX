@@ -292,11 +292,11 @@ private fun AccountRow(
 
 @Composable
 private fun RowAvatar(profile: AccountProfile) {
-    var avatar by remember(profile.uuid, profile.avatarUrl) { mutableStateOf<ImageBitmap?>(null) }
+    var avatar by remember(profile.uuid, profile.avatar) { mutableStateOf<ImageBitmap?>(null) }
 
-    LaunchedEffect(profile.uuid, profile.avatarUrl) {
+    LaunchedEffect(profile.uuid, profile.avatar) {
         avatar = null
-        avatar = profile.avatarUrl?.let { AvatarLoader.load(it) }
+        avatar = AvatarLoader.load(profile.avatar)
     }
 
     val size = 32.dp

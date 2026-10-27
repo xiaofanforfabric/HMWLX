@@ -39,8 +39,8 @@ import org.cn.xiaofan.i18n.text
 /**
  * 顶部账号栏：显示当前登录的账号。
  *
- * 头像来源由 [AccountProfile.avatarUrl] 决定（见 `AccountResolver`）：
- * 正版走 Mojang 官方接口，离线走 Steve，皮肤站走对应站点。
+ * 头像来源由 [AccountProfile.avatar] 决定（见 `AccountResolver`）：
+ * 正版走 Mojang 官方接口，离线用内置 Steve 皮肤，皮肤站走对应站点。
  *
  * 头像加载是异步的：加载完成前显示首字母占位，失败也回退到占位符，
  * 不会让界面卡住或出现空白。
@@ -56,17 +56,17 @@ fun AccountBar(
     modifier: Modifier = Modifier,
     onOpenSwitch: () -> Unit = {},
 ) {
-    // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatarUrl）。
-    // 若只按 uuid 记忆，同一账号的 avatarUrl 变化时（改配置后重启、或系统属性覆盖），
+    // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatar）。
+    // 若只按 uuid 记忆，同一账号的 avatar 变化时（改配置后重启、或系统属性覆盖），
     // 状态不会重置，上一张头像会残留在界面上。
-    var avatar by remember(profile.uuid, profile.avatarUrl) {
+    var avatar by remember(profile.uuid, profile.avatar) {
         mutableStateOf<ImageBitmap?>(null)
     }
 
-    LaunchedEffect(profile.uuid, profile.avatarUrl) {
-        // 先清空再加载：避免 URL 切换后新旧图混在一起
+    LaunchedEffect(profile.uuid, profile.avatar) {
+        // 先清空再加载：避免来源切换后新旧图混在一起
         avatar = null
-        avatar = profile.avatarUrl?.let { AvatarLoader.load(it) }
+        avatar = AvatarLoader.load(profile.avatar)
     }
 
     Surface(

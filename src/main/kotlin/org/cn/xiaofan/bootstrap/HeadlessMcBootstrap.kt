@@ -119,6 +119,35 @@ object HeadlessMcBootstrap {
         return instances.get()
     }
 
+    /**
+     * 按泛型类型取一个 CDI bean，用于 `AuthStore<Account>` 这类带类型参数的 bean。
+     *
+     * @param typeLiteral 用 `object : TypeLiteral<AuthStore<Account>>() {}` 构造
+     * @param typeName 仅用于错误信息，便于定位是哪个 bean 没解析到
+     * @param qualifiers 限定符，如离线账号存储需要 `@Offline`
+     * @throws IllegalStateException 容器未就绪，或该类型没有可解析 / 不唯一的 bean
+     */
+    fun <T : Any> beanOfType(
+        typeLiteral: jakarta.enterprise.util.TypeLiteral<T>,
+        typeName: String,
+        qualifiers: Array<Annotation> = emptyArray(),
+    ): T {
+        if (!isReady) {
+            throw IllegalStateException(
+                "headlessmc 容器尚未就绪（当前状态: ${state.get()}），无法获取 $typeName"
+            )
+        }
+
+        val instances = ArcInstances.byTypeLiteral(typeLiteral, qualifiers)
+        if (instances.isUnsatisfied) {
+            throw IllegalStateException("找不到 bean: $typeName")
+        }
+        if (instances.isAmbiguous) {
+            throw IllegalStateException("bean 不唯一: $typeName")
+        }
+        return instances.get()
+    }
+
     /** 关闭容器。在后台触发，不阻塞调用线程。 */
     fun shutdown() {
         if (state.getAndSet(State.NEW) == State.READY) {

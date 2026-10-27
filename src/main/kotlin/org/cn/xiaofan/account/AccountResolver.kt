@@ -32,9 +32,18 @@ data class AccountProfile(
     val provider: String,
     /** 不带连字符的 UUID。 */
     val uuid: String,
-    /** 头像 URL，取不到时为 null（界面回退到默认图标）。 */
-    val avatarUrl: String?,
+    /**
+     * 头像来源。
+     *
+     * - 网络地址：正版走 Mojang 会话服务，皮肤站走站点自己的纹理接口
+     * - [AvatarSource.BuiltInSkin]：离线账号用内置皮肤，不发起任何网络请求
+     * - null：取不到，界面回退到首字母占位
+     */
+    val avatar: AvatarSource?,
 ) {
+    /** 头像的网络地址，内置皮肤或缺失时为 null。 */
+    val avatarUrl: String? get() = (avatar as? AvatarSource.Remote)?.url
+
     /** 是否为离线账号。 */
     val isOffline: Boolean get() = provider == AuthProvider.OFFLINE
 
@@ -43,6 +52,34 @@ data class AccountProfile(
 
     /** 是否为皮肤站账号。 */
     val isYggdrasil: Boolean get() = provider == AuthProvider.YGGDRASIL
+}
+
+/**
+ * 头像的来源。
+ *
+ * 用 sealed 类型区分「网络下载」与「内置资源」，是为了让离线账号不去访问网络：
+ * 离线 UUID 是 `UUID.nameUUIDFromBytes("OfflinePlayer:<name>")` 算出来的，
+ * Mojang 数据库里没有这个 ID，强行请求只会拿到 204 空响应。
+ */
+sealed interface AvatarSource {
+    /**
+     * 从网络下载皮肤。
+     *
+     * @property url 可以是皮肤 PNG 直链，也可以是 Yggdrasil / Mojang 的 profile 接口
+     */
+    data class Remote(val url: String) : AvatarSource
+
+    /**
+     * 使用打进 jar 的内置皮肤。
+     *
+     * 目前只有离线账号用，取 [BuiltInSkin.STEVE]。
+     */
+    data class BuiltInSkin(val resourcePath: String) : AvatarSource {
+        companion object {
+            /** Steve 皮肤，位于 `src/main/resources/skins/steve.png`。 */
+            val STEVE = BuiltInSkin("/skins/steve.png")
+        }
+    }
 }
 
 /**
@@ -90,7 +127,7 @@ object AccountResolver {
                 name = "Offline",
                 provider = AuthProvider.OFFLINE,
                 uuid = STEVE_UUID,
-                avatarUrl = "$MOJANG_SESSION/$STEVE_UUID",
+                avatar = AvatarSource.BuiltInSkin.STEVE,
             )
         }
 
@@ -110,20 +147,23 @@ object AccountResolver {
             name = name,
             provider = provider,
             uuid = cleanUuid,
-            avatarUrl = avatarUrlFor(provider, cleanUuid),
+            avatar = avatarFor(provider, cleanUuid),
         )
     }
 
     /**
-     * 按 provider 决定头像地址。
+     * 按 provider 决定头像来源。
      *
-     * 正版 / 离线都走 Mojang：这是唯一稳定且无需鉴权的官方接口。
-     * 皮肤站走账号自己记录的 serverUrl（YggdrasilAccount 里保存的），
-     * 因为不同皮肤站的纹理接口可能不同，只有它自己的地址才可靠。
+     * - **正版**：Mojang 会话服务，有 UUID 就能取到皮肤，无需鉴权
+     * - **离线**：内置 Steve 皮肤，**不访问网络**。离线 UUID 是
+     *   `UUID.nameUUIDFromBytes("OfflinePlayer:<name>")` 的结果，Mojang 不认识，
+     *   请求只会得到 204 空响应 —— 之前头像一直显示首字母就是这个原因
+     * - **皮肤站**：站点自己的纹理接口，地址随站点不同
      */
-    private fun avatarUrlFor(provider: String, uuid: String): String? = when (provider) {
-        AuthProvider.DEFAULT, AuthProvider.OFFLINE -> "$MOJANG_SESSION/$uuid"
-        AuthProvider.YGGDRASIL -> yggdrasilAvatarUrl(uuid)
+    private fun avatarFor(provider: String, uuid: String): AvatarSource? = when (provider) {
+        AuthProvider.DEFAULT -> AvatarSource.Remote("$MOJANG_SESSION/$uuid")
+        AuthProvider.OFFLINE -> AvatarSource.BuiltInSkin.STEVE
+        AuthProvider.YGGDRASIL -> yggdrasilAvatarUrl(uuid)?.let { AvatarSource.Remote(it) }
         else -> null
     }
 

@@ -145,7 +145,7 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
 
         val account = AccountResolver.current()
         println("[HMWLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
-        println("[HMWLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
+        println("[HMWLX] 头像来源: ${account.avatar ?: "<无>"}")
 
         val detail = readHeadlessMcInfo()
         println("[HMWLX] 桥接信息:\n$detail")

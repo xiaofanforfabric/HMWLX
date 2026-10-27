@@ -3,8 +3,12 @@ package org.cn.xiaofan.account
 import io.github.headlesshq.headlessmc.auth.Account
 import io.github.headlesshq.headlessmc.auth.AuthProvider
 import io.github.headlesshq.headlessmc.auth.AuthService
+import io.github.headlesshq.headlessmc.auth.AuthStore
 import io.github.headlesshq.headlessmc.auth.LastUsedAccountService
+import io.github.headlesshq.headlessmc.auth.cdi.Offline
+import jakarta.enterprise.util.TypeLiteral
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import java.lang.reflect.Proxy
 import java.util.UUID
 
 /**
@@ -140,23 +144,66 @@ object AccountService {
                 "",                    // xuid：仅正版有，传空串
             )
 
-            val provider = HeadlessMcBootstrap.bean(AuthService::class.java)
-                .getProvider(AuthProvider.OFFLINE)
-                .orElse(null)
-                ?: return OfflineAccountResult.Failed("headlessmc 未启用离线认证源")
-
-            // getAuthStore 只在具体实现上暴露，接口没有，所以按实现类型找
-            val store = runCatching {
-                provider.javaClass.getMethod("getAuthStore").invoke(provider)
-            }.getOrNull() ?: return OfflineAccountResult.Failed("无法取得离线认证源的存储")
-
-            @Suppress("UNCHECKED_CAST")
-            val authStore = store as io.github.headlesshq.headlessmc.auth.AuthStore<Account>
-            authStore.add(account.name, account)
+            offlineAccountStore().add(account.name, account)
 
             OfflineAccountResult.Success(account.toProfile())
         }.getOrElse { OfflineAccountResult.Failed(it.message ?: it.javaClass.simpleName) }
     }
+
+    /**
+     * 取离线账号的存储。
+     *
+     * `AuthStore` 由 `AuthFactory.createOfflineAccountStore` 产出，带 `@Produces` 与
+     * `@Offline` 两个注解 —— 因此必须按「泛型类型 + 限定符」查找，只看类型会撞上
+     * Yggdrasil 的同类型 bean，判定为不唯一。
+     *
+     * 不要走 `AuthProvider.getAuthStore()`：CDI 返回的是代理对象，代理上只有接口
+     * 声明的方法，`getAuthStore` 是 `OfflineAuthProvider` 的实现类方法，反射调用
+     * 会抛 `NoSuchMethodException`，表现为「无法取得离线认证源的存储」。
+     */
+    private fun offlineAccountStore(): AuthStore<Account> =
+        HeadlessMcBootstrap.beanOfType(
+            typeLiteral = object : TypeLiteral<AuthStore<Account>>() {},
+            typeName = "AuthStore<Account> @Offline",
+            qualifiers = arrayOf(offlineQualifier()),
+        )
+
+    /**
+     * 取 `io.github.headlesshq.headlessmc.auth.cdi.Offline` 限定符的实例。
+     *
+     * Java 的注解是接口，**不能** `newInstance()` 实例化（那会抛
+     * `NoSuchMethodException: Offline.<init>()`）。CDI 的 `select` 需要的是
+     * 注解实例，标准做法是用动态代理伪造一个：所有 member 方法返回默认值，
+     * `annotationType()` 返回注解类本身，`equals`/`hashCode` 与真正的注解实例一致。
+     *
+     * `@Offline` 没有成员，所以代理只需要处理
+     * `annotationType()`、`equals`、`hashCode`、`toString` 四个方法。
+     */
+    private fun offlineQualifier(): Annotation =
+        Proxy.newProxyInstance(
+            Offline::class.java.classLoader,
+            arrayOf(Offline::class.java),
+        ) { proxy, method, args ->
+            when (method.name) {
+                "annotationType" -> Offline::class.java
+                "equals" -> proxy === (args?.firstOrNull())
+                "hashCode" -> 0
+                "toString" -> "@${Offline::class.java.name}()"
+                // 无成员注解，走到这里说明引用了不存在的属性
+                else -> error("Unexpected annotation member: ${method.name}")
+            }
+        } as Annotation
+
+    /**
+     * 仅供测试：暴露 [offlineAccountStore] 的结果，用于验证 CDI 解析链路。
+     *
+     * 失败时把原因打到 stdout —— 否则测试只能看到「取不到」，无法定位是
+     * 索引缺失、限定符不匹配还是别的原因。
+     */
+    internal fun debugOfflineAccountStore(): AuthStore<Account>? =
+        runCatching { offlineAccountStore() }
+            .onFailure { it.printStackTrace() }
+            .getOrNull()
 
     /**
      * 校验离线账号的用户名。
