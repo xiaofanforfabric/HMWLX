@@ -6,6 +6,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.i18n.Messages
+import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.ui.HmyLxApp
 
 /**
@@ -23,7 +25,7 @@ fun main() = application {
             exitApplication()
         },
         state = windowState,
-        title = "HMYLX - hello my world launcher X"
+        title = Messages.get(TextKey.WINDOW_TITLE)
     ) {
         HmyLxApp()
     }

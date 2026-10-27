@@ -3,6 +3,8 @@ package org.cn.xiaofan.account
 import io.github.headlesshq.headlessmc.auth.AuthProvider
 import io.github.headlesshq.headlessmc.auth.AuthService
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.i18n.Messages
+import org.cn.xiaofan.i18n.TextKey
 
 /**
  * 账号信息与头像来源。
@@ -41,15 +43,20 @@ data class AccountProfile(
 
     /** 是否为皮肤站账号。 */
     val isYggdrasil: Boolean get() = provider == AuthProvider.YGGDRASIL
+}
 
-    /** 展示用的来源标签。 */
-    val sourceLabel: String
-        get() = when {
-            isMicrosoft -> "正版"
-            isYggdrasil -> "皮肤站"
-            isOffline -> "离线"
-            else -> provider
-        }
+/**
+ * 账号来源的展示标签。
+ *
+ * 放在这里而不是 [AccountProfile] 里：语言包是 UI 层的事，账号模型不该为了
+ * 显示名称去依赖 i18n —— 否则切换当前语言时会连数据层一起受影响。
+ * 未知 provider 直接显示原值，免得把内部标识也塞进语言包。
+ */
+fun AccountProfile.sourceLabel(): String = when {
+    isMicrosoft -> Messages.get(TextKey.SOURCE_MICROSOFT)
+    isYggdrasil -> Messages.get(TextKey.SOURCE_YGGDRASIL)
+    isOffline -> Messages.get(TextKey.SOURCE_OFFLINE)
+    else -> provider
 }
 
 /**

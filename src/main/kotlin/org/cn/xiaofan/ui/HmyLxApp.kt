@@ -1,18 +1,14 @@
 package org.cn.xiaofan.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -31,7 +27,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountResolver
+import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.i18n.Messages
+import org.cn.xiaofan.i18n.TextKey
+import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 
 /**
@@ -123,7 +123,7 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
         println("[HMYLX] 容器已就绪，状态=${HeadlessMcBootstrap.currentState()}")
 
         val account = AccountResolver.current()
-        println("[HMYLX] 当前账号: ${account.name} (${account.sourceLabel}) uuid=${account.uuid}")
+        println("[HMYLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
         println("[HMYLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
 
         val detail = readHeadlessMcInfo()
@@ -141,7 +141,7 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
  */
 private fun readHeadlessMcInfo(): String {
     val parts = mutableListOf<String>()
-    parts += "容器状态: ${HeadlessMcBootstrap.currentState()}"
+    parts += Messages.get(TextKey.READY_CONTAINER_STATE, HeadlessMcBootstrap.currentState())
 
     // CommandLine 是 headlessmc 的核心 bean，能取到就说明 CDI 正常
     val commandLine = runCatching {
@@ -149,10 +149,10 @@ private fun readHeadlessMcInfo(): String {
     }.getOrNull()
 
     if (commandLine != null) {
-        parts += "根命令: ${commandLine.commandSpec.name()}"
-        parts += "子命令数: ${commandLine.subcommands.size}"
+        parts += Messages.get(TextKey.READY_ROOT_COMMAND, commandLine.commandSpec.name())
+        parts += Messages.get(TextKey.READY_SUBCOMMAND_COUNT, commandLine.subcommands.size)
     } else {
-        parts += "根命令: <未取到>"
+        parts += Messages.get(TextKey.READY_ROOT_COMMAND_MISSING)
     }
 
     return parts.joinToString("\n")
@@ -163,7 +163,7 @@ private fun LoadingScreen() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         CircularProgressIndicator(modifier = Modifier.size(48.dp))
         Spacer(Modifier.height(16.dp))
-        Text("正在启动 headlessmc 容器…", style = MaterialTheme.typography.bodyLarge)
+        Text(text(TextKey.BOOT_LOADING), style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -174,12 +174,12 @@ private fun ReadyScreen(detail: String) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "HMYLX",
+            text = text(TextKey.APP_NAME),
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "hello my world launcher X",
+            text = text(TextKey.APP_SUBTITLE),
             style = MaterialTheme.typography.titleSmall
         )
         Spacer(Modifier.height(24.dp))
@@ -194,7 +194,7 @@ private fun FailedScreen(failed: BootState.Failed) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "启动失败",
+            text = text(TextKey.BOOT_FAILED_TITLE),
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.error
         )
