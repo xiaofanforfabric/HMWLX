@@ -33,6 +33,7 @@ import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
+import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -62,6 +63,9 @@ sealed interface BootState {
 @Composable
 fun HmwLxApp() {
     var state by remember { mutableStateOf<BootState>(BootState.Loading) }
+    // 是否正在展示账号切换界面。账号切换是覆盖整个内容区的独立页面，
+    // 而不是弹窗：它的列表可能很长，弹窗放不下。
+    var showAccountSwitch by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         state = bootstrap()
@@ -75,13 +79,30 @@ fun HmwLxApp() {
                         LoadingScreen()
                     }
                     is BootState.Ready -> {
-                        AccountBar(profile = current.account)
-                        // weight(1f) 让内容区吃掉账号栏之外的**剩余**高度。
-                        // 这里不能用 fillMaxSize()：Column 内的 fillMaxSize 会按父约束的
-                        // 完整高度测量，总高变成 账号栏 + 整窗高，超出部分被裁掉，
-                        // 居中的内容会偏到看不见的位置。
-                        ContentArea {
-                            ReadyScreen(current.detail)
+                        if (showAccountSwitch) {
+                            AccountSwitchScreen(
+                                current = current.account,
+                                onSwitched = { profile ->
+                                    // 切换成功后立刻回到主界面，并用新账号刷新状态。
+                                    // 不重新启动容器：账号只是 headlessmc 里的一个字段，
+                                    // 容器本身不需要重启。
+                                    state = current.copy(account = profile)
+                                    showAccountSwitch = false
+                                },
+                                onClose = { showAccountSwitch = false },
+                            )
+                        } else {
+                            AccountBar(
+                                profile = current.account,
+                                onOpenSwitch = { showAccountSwitch = true },
+                            )
+                            // weight(1f) 让内容区吃掉账号栏之外的**剩余**高度。
+                            // 这里不能用 fillMaxSize()：Column 内的 fillMaxSize 会按父约束的
+                            // 完整高度测量，总高变成 账号栏 + 整窗高，超出部分被裁掉，
+                            // 居中的内容会偏到看不见的位置。
+                            ContentArea {
+                                ReadyScreen(current.detail)
+                            }
                         }
                     }
                     is BootState.Failed -> ContentArea {
@@ -124,7 +145,7 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
 
         val account = AccountResolver.current()
         println("[HMWLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
-        println("[HMWLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
+        println("[HMWLX] 头像来源: ${account.avatar ?: "<无>"}")
 
         val detail = readHeadlessMcInfo()
         println("[HMWLX] 桥接信息:\n$detail")

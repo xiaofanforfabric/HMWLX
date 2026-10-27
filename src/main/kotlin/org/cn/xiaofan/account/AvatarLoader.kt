@@ -61,20 +61,50 @@ object AvatarLoader {
      *
      * @return 8x8 的头部图，失败时返回 null（界面回退到占位符）
      */
-    suspend fun load(url: String): ImageBitmap? = withContext(Dispatchers.IO) {
-        try {
+    suspend fun load(url: String): ImageBitmap? = load(AvatarSource.Remote(url))
+
+    /**
+     * 按来源加载头像。
+     *
+     * 内置皮肤直接读 jar 里的资源，不产生任何网络请求。
+     */
+    suspend fun load(source: AvatarSource?): ImageBitmap? = withContext(Dispatchers.IO) {
+        when (source) {
+            null -> null
+            is AvatarSource.BuiltInSkin -> loadBuiltIn(source.resourcePath)
+            is AvatarSource.Remote -> loadRemote(source.url)
+        }
+    }
+
+    /** 读内置皮肤并裁出头部。 */
+    private fun loadBuiltIn(resourcePath: String): ImageBitmap? = try {
+        val bytes = AvatarLoader::class.java.getResourceAsStream(resourcePath)?.use { it.readBytes() }
+        if (bytes == null) {
+            System.err.println("[Avatar] 内置皮肤资源缺失: $resourcePath")
+            null
+        } else {
+            cropHead(Image.makeFromEncoded(bytes).toComposeImageBitmap())
+        }
+    } catch (t: Throwable) {
+        System.err.println("[Avatar] 内置皮肤加载失败 $resourcePath: ${t.javaClass.simpleName}: ${t.message}")
+        null
+    }
+
+    /** 从网络加载皮肤并裁出头部。 */
+    private fun loadRemote(url: String): ImageBitmap? {
+        return try {
             val skinBytes = if (PROFILE_ENDPOINT.matcher(url).matches()) {
                 // 两步：profile JSON → 皮肤地址 → 下载皮肤
                 val profileJson = downloadBytes(url)?.toString(Charsets.UTF_8)
-                    ?: return@withContext null
+                    ?: return null
                 val skinUrl = resolveSkinUrl(profileJson) ?: run {
                     System.err.println("[Avatar] 未能从 profile 解析出 SKIN.url: $url")
-                    return@withContext null
+                    return null
                 }
                 downloadBytes(skinUrl)
             } else {
                 downloadBytes(url)
-            } ?: return@withContext null
+            } ?: return null
 
             val skin = Image.makeFromEncoded(skinBytes).toComposeImageBitmap()
             cropHead(skin)

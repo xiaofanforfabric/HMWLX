@@ -46,6 +46,73 @@ object TextKey {
     /** 玩家头像的描述。`{0}` 为玩家名。 */
     const val ACCOUNT_AVATAR_DESCRIPTION = "account.avatar.description"
 
+    // --- 账号切换 ---
+
+    /** 账号切换界面标题。 */
+    const val ACCOUNT_SWITCH_TITLE = "account.switch.title"
+
+    /** 返回按钮。 */
+    const val ACCOUNT_SWITCH_BACK = "account.switch.back"
+
+    /** 当前账号标记。 */
+    const val ACCOUNT_CURRENT = "account.current"
+
+    /** 切换账号失败。`{0}` 为用户名。 */
+    const val ACCOUNT_SWITCH_FAILED = "account.switch.failed"
+
+    /** 分组标题：微软正版。 */
+    const val ACCOUNT_GROUP_MICROSOFT = "account.group.microsoft"
+
+    /** 分组标题：离线。 */
+    const val ACCOUNT_GROUP_OFFLINE = "account.group.offline"
+
+    /** 分组标题：外置登录。 */
+    const val ACCOUNT_GROUP_YGGDRASIL = "account.group.yggdrasil"
+
+    /** 分组为空时的提示。 */
+    const val ACCOUNT_GROUP_EMPTY = "account.group.empty"
+
+    /** 右侧登录区标题。 */
+    const val ACCOUNT_LOGIN_TITLE = "account.login.title"
+
+    /** 登录微软账号按钮。 */
+    const val ACCOUNT_LOGIN_MICROSOFT = "account.login.microsoft"
+
+    /** 登录离线账号按钮。 */
+    const val ACCOUNT_LOGIN_OFFLINE = "account.login.offline"
+
+    /** 登录第三方外置登录账号按钮。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL = "account.login.yggdrasil"
+
+    // --- 添加离线账号 ---
+
+    /** 对话框标题。 */
+    const val ACCOUNT_ADD_OFFLINE_TITLE = "account.add.offline.title"
+
+    /** 对话框说明文字。 */
+    const val ACCOUNT_ADD_OFFLINE_DESC = "account.add.offline.desc"
+
+    /** 用户名输入框标签。 */
+    const val ACCOUNT_ADD_OFFLINE_LABEL = "account.add.offline.label"
+
+    /** 用户名过长。 */
+    const val ACCOUNT_ADD_OFFLINE_TOO_LONG = "account.add.offline.too.long"
+
+    /** 用户名含非法字符。 */
+    const val ACCOUNT_ADD_OFFLINE_INVALID_CHARS = "account.add.offline.invalid.chars"
+
+    /** 重名。`{0}` 为用户名。 */
+    const val ACCOUNT_ADD_OFFLINE_DUPLICATE = "account.add.offline.duplicate"
+
+    /** 创建失败。`{0}` 为原因。 */
+    const val ACCOUNT_ADD_OFFLINE_FAILED = "account.add.offline.failed"
+
+    /** 确定按钮。 */
+    const val ACCOUNT_ADD_OFFLINE_CONFIRM = "account.add.offline.confirm"
+
+    /** 取消按钮。 */
+    const val ACCOUNT_ADD_OFFLINE_CANCEL = "account.add.offline.cancel"
+
     // --- 用户协议 ---
 
     /** 开屏标题，如「请先阅读用户协议」。 */

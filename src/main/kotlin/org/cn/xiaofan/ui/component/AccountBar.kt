@@ -3,6 +3,7 @@ package org.cn.xiaofan.ui.component
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -38,28 +39,34 @@ import org.cn.xiaofan.i18n.text
 /**
  * 顶部账号栏：显示当前登录的账号。
  *
- * 头像来源由 [AccountProfile.avatarUrl] 决定（见 `AccountResolver`）：
- * 正版走 Mojang 官方接口，离线走 Steve，皮肤站走对应站点。
+ * 头像来源由 [AccountProfile.avatar] 决定（见 `AccountResolver`）：
+ * 正版走 Mojang 官方接口，离线用内置 Steve 皮肤，皮肤站走对应站点。
  *
  * 头像加载是异步的：加载完成前显示首字母占位，失败也回退到占位符，
  * 不会让界面卡住或出现空白。
+ *
+ * 整条都可点击：点击进入账号切换界面。用整条而不是只绑头像，
+ * 是因为头像只有 36dp，单独点它太小，用户很容易点空。
+ *
+ * @param onOpenSwitch 点击账号栏时触发，由调用方切换到账号界面
  */
 @Composable
 fun AccountBar(
     profile: AccountProfile,
     modifier: Modifier = Modifier,
+    onOpenSwitch: () -> Unit = {},
 ) {
-    // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatarUrl）。
-    // 若只按 uuid 记忆，同一账号的 avatarUrl 变化时（改配置后重启、或系统属性覆盖），
-    // 状态不会重置，上一张头像会残留在界面上。
-    var avatar by remember(profile.uuid, profile.avatarUrl) {
+    // key 必须与下面的 LaunchedEffect 完全一致，都用 avatarKey（provider + uuid）。
+    // 不用 avatar 本身：离线账号的 BuiltInSkin.STEVE 是共用单例，「小凡」与「小明」
+    // 的 avatar 相等，换号时 key 不变，上一张头像会留在界面上。
+    var avatar by remember(profile.avatarKey) {
         mutableStateOf<ImageBitmap?>(null)
     }
 
-    LaunchedEffect(profile.uuid, profile.avatarUrl) {
-        // 先清空再加载：避免 URL 切换后新旧图混在一起
+    LaunchedEffect(profile.avatarKey) {
+        // 先清空再加载：避免来源切换后新旧图混在一起
         avatar = null
-        avatar = profile.avatarUrl?.let { AvatarLoader.load(it) }
+        avatar = AvatarLoader.load(profile.avatar)
     }
 
     Surface(
@@ -69,6 +76,7 @@ fun AccountBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(onClick = onOpenSwitch)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
