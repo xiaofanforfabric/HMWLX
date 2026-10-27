@@ -34,9 +34,20 @@ object AvatarLoader {
     /** 网络超时（毫秒）。头像加载失败不应阻塞界面。 */
     private const val TIMEOUT_MS = 8000
 
-    /** 识别 Yggdrasil profile 接口。 */
+    /**
+     * 识别 profile 接口（返回 JSON，需要两步解析）。
+     *
+     * 两家的路径不同，必须都覆盖：
+     * - Mojang 官方：`sessionserver.mojang.com/session/minecraft/profile/<uuid>`
+     *   —— 注意路径里**没有** `sessionserver` 这一段，域名里才有
+     * - Yggdrasil 皮肤站：`<站点>/api/yggdrasil/sessionserver/session/minecraft/profile/<uuid>`
+     *   —— 路径里多一层 `sessionserver`
+     *
+     * 早期只写了后者的形式，导致正版账号的 JSON 被当成 PNG 去解码，
+     * 报 `Failed to Image::makeFromEncoded`，头像退化成首字母。
+     */
     private val PROFILE_ENDPOINT =
-        Pattern.compile(".*/sessionserver/session/minecraft/profile/.*")
+        Pattern.compile(".*/(sessionserver/)?session/minecraft/profile/.*")
 
     /**
      * 从 profile JSON 里提取 base64 的 textures 字段。
@@ -114,6 +125,14 @@ object AvatarLoader {
             null
         }
     }
+
+    /**
+     * 仅供测试：暴露 profile JSON 的皮肤地址解析。
+     *
+     * 解析逻辑是头像链路里最容易出错的一环（字段顺序、base64、嵌套结构），
+     * 用真实返回体测它比测 URL 字符串有意义得多。
+     */
+    internal fun debugResolveSkinUrl(profileJson: String): String? = resolveSkinUrl(profileJson)
 
     /**
      * 从 Yggdrasil profile JSON 里解析皮肤地址。
