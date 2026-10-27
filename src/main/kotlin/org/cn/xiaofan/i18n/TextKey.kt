@@ -87,6 +87,9 @@ object TextKey {
     /** 微软登录：等待用户完成授权。 */
     const val ACCOUNT_LOGIN_MICROSOFT_WAITING = "account.login.microsoft.waiting"
 
+    /** 微软登录：重新打开浏览器按钮。 */
+    const val ACCOUNT_LOGIN_MICROSOFT_REOPEN = "account.login.microsoft.reopen"
+
     /** 微软登录：关闭按钮。 */
     const val ACCOUNT_LOGIN_MICROSOFT_CLOSE = "account.login.microsoft.close"
 

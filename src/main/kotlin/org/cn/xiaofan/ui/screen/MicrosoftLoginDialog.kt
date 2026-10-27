@@ -2,6 +2,7 @@ package org.cn.xiaofan.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +34,7 @@ import org.cn.xiaofan.account.MicrosoftLogin
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.util.Browser
 
 /**
  * 微软账号登录对话框。
@@ -55,6 +57,8 @@ fun MicrosoftLoginDialog(
     var verificationUrl by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf(false) }
+    // 浏览器是否已经自动拉起过，避免重组时重复打开
+    var browserOpened by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         // 整个登录流程是阻塞的，必须离开 UI 线程
@@ -69,6 +73,15 @@ fun MicrosoftLoginDialog(
             is LoginResult.Success -> onLoggedIn(result.profile)
             is LoginResult.Failed -> error = result.reason
         }
+    }
+
+    // 拿到链接就自动拉起浏览器。放在独立的 effect 里而不是登录回调内：
+    // 回调在 IO 线程执行，且可能被调用多次，这里用 browserOpened 保证只开一次。
+    LaunchedEffect(verificationUrl) {
+        val url = verificationUrl ?: return@LaunchedEffect
+        if (browserOpened) return@LaunchedEffect
+        browserOpened = true
+        Browser.open(url)
     }
 
     AlertDialog(
@@ -103,19 +116,28 @@ fun MicrosoftLoginDialog(
                             text = text(TextKey.ACCOUNT_LOGIN_MICROSOFT_HINT),
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(8.dp))
 
-                        // 用等宽字体并允许选中复制：链接很长，手打不现实
+                        // 链接仍然展示：自动打开可能失败（无桌面环境、没有默认浏览器），
+                        // 这时用户还能手动复制。等宽 + 可选中，方便辨认与复制。
                         SelectionContainer {
                             Text(
                                 text = url,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
 
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(
+                            onClick = { Browser.open(url) },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                        ) {
+                            Text(text(TextKey.ACCOUNT_LOGIN_MICROSOFT_REOPEN))
+                        }
+
+                        Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(12.dp))
