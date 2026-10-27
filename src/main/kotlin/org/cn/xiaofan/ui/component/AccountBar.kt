@@ -31,6 +31,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AvatarLoader
+import org.cn.xiaofan.account.sourceLabel
+import org.cn.xiaofan.i18n.TextKey
+import org.cn.xiaofan.i18n.text
 
 /**
  * 顶部账号栏：显示当前登录的账号。
@@ -83,7 +86,7 @@ fun AccountBar(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    SourceBadge(profile.sourceLabel)
+                    SourceBadge(profile.sourceLabel())
                 }
             }
         }
@@ -111,7 +114,7 @@ private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?) {
         if (avatar != null) {
             Image(
                 bitmap = avatar,
-                contentDescription = "${profile.name} 的头像",
+                contentDescription = text(TextKey.ACCOUNT_AVATAR_DESCRIPTION, profile.name),
                 modifier = Modifier.size(size),
                 // 像素画必须用最近邻，否则会糊
                 filterQuality = FilterQuality.None,
