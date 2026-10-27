@@ -28,7 +28,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.cn.xiaofan.account.AccountProfile
+import org.cn.xiaofan.account.AccountResolver
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.ui.component.AccountBar
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -37,8 +40,13 @@ sealed interface BootState {
     /** 正在启动 Quarkus 容器。 */
     data object Loading : BootState
 
-    /** 容器已就绪。[detail] 是从 headlessmc 取到的信息，用于证明 bridge 真的通了。 */
-    data class Ready(val detail: String) : BootState
+    /**
+     * 容器已就绪。
+     *
+     * @param account 当前登录账号（含头像来源），未登录时为默认离线账号
+     * @param detail 从 headlessmc 取到的桥接信息，用于验证 CDI 链路
+     */
+    data class Ready(val account: AccountProfile, val detail: String) : BootState
 
     /** 启动失败。 */
     data class Failed(val message: String, val cause: Throwable?) : BootState
@@ -46,6 +54,9 @@ sealed interface BootState {
 
 /**
  * 应用主界面。
+ *
+ * 布局：顶部固定账号栏，下方是内容区。
+ * 账号栏在容器就绪后才显示 —— 因为账号信息要通过 CDI 从 headlessmc 读取。
  */
 @Composable
 fun HmyLxApp() {
@@ -57,11 +68,24 @@ fun HmyLxApp() {
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(modifier = Modifier.fillMaxSize()) {
                 when (val current = state) {
                     is BootState.Loading -> LoadingScreen()
-                    is BootState.Ready -> ReadyScreen(current.detail)
-                    is BootState.Failed -> FailedScreen(current)
+                    is BootState.Ready -> {
+                        AccountBar(profile = current.account)
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            ReadyScreen(current.detail)
+                        }
+                    }
+                    is BootState.Failed -> Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        FailedScreen(current)
+                    }
                 }
             }
         }
@@ -79,9 +103,14 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
         println("[HMYLX] 正在启动 headlessmc 容器…")
         HeadlessMcBootstrap.start()
         println("[HMYLX] 容器已就绪，状态=${HeadlessMcBootstrap.currentState()}")
+
+        val account = AccountResolver.current()
+        println("[HMYLX] 当前账号: ${account.name} (${account.sourceLabel}) uuid=${account.uuid}")
+        println("[HMYLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
+
         val detail = readHeadlessMcInfo()
         println("[HMYLX] 桥接信息:\n$detail")
-        BootState.Ready(detail)
+        BootState.Ready(account = account, detail = detail)
     } catch (t: Throwable) {
         println("[HMYLX] 容器启动失败: ${t.message}")
         t.printStackTrace()
