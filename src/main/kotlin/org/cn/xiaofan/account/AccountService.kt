@@ -114,11 +114,20 @@ object AccountService {
      * 这与原版服务端离线模式算出来的 UUID 一致，同一个名字在不同启动器里会得到同一个
      * UUID，服务器白名单之类的场景才对得上。
      *
-     * @return 新建的账号，失败时为 null
+     * @return 成功时返回新建账号；失败时返回带原因的错误
      */
-    fun addOfflineAccount(name: String): AccountProfile? {
+    fun addOfflineAccount(name: String): OfflineAccountResult {
         val trimmed = name.trim()
-        if (trimmed.isEmpty()) return null
+
+        validateName(trimmed)?.let { return OfflineAccountResult.InvalidName(it) }
+
+        // 重名直接拒绝：headlessmc 的 AuthStore 以名字为键，同名会覆盖已有账号，
+        // 用户的旧 UUID 会悄悄丢掉。反过来说，同名账号的 UUID 本来就一样，
+        // 再存一份也没有意义。
+        val exists = groupedAccounts()[AccountGroup.OFFLINE]
+            .orEmpty()
+            .any { it.name.equals(trimmed, ignoreCase = true) }
+        if (exists) return OfflineAccountResult.DuplicateName(trimmed)
 
         return runCatching {
             val uuid = offlineUuid(trimmed)
@@ -134,20 +143,40 @@ object AccountService {
             val provider = HeadlessMcBootstrap.bean(AuthService::class.java)
                 .getProvider(AuthProvider.OFFLINE)
                 .orElse(null)
-                ?: error("headlessmc 未启用离线认证源")
+                ?: return OfflineAccountResult.Failed("headlessmc 未启用离线认证源")
 
             // getAuthStore 只在具体实现上暴露，接口没有，所以按实现类型找
             val store = runCatching {
                 provider.javaClass.getMethod("getAuthStore").invoke(provider)
-            }.getOrNull() ?: error("无法取得离线认证源的存储")
+            }.getOrNull() ?: return OfflineAccountResult.Failed("无法取得离线认证源的存储")
 
             @Suppress("UNCHECKED_CAST")
             val authStore = store as io.github.headlesshq.headlessmc.auth.AuthStore<Account>
             authStore.add(account.name, account)
 
-            account.toProfile()
-        }.getOrNull()
+            OfflineAccountResult.Success(account.toProfile())
+        }.getOrElse { OfflineAccountResult.Failed(it.message ?: it.javaClass.simpleName) }
     }
+
+    /**
+     * 校验离线账号的用户名。
+     *
+     * 规则取自 Mojang 官方：3–16 个字符，仅允许 `A-Z a-z 0-9 _`。
+     * 原版服务端在离线模式下其实不做这个检查，但启动器层面拒掉可以省去后面
+     * 一堆「游戏里名字显示不出来」的诡异问题。
+     *
+     * @return 不合法时返回原因，合法时返回 null
+     */
+    private fun validateName(name: String): String? {
+        if (name.isEmpty()) return "用户名不能为空"
+        if (name.length < 3) return "用户名至少 3 个字符"
+        if (name.length > 16) return "用户名最多 16 个字符"
+        if (!NAME_PATTERN.matches(name)) return "只能包含字母、数字和下划线"
+        return null
+    }
+
+    /** 用户名允许的字符，与 Mojang 规则一致。 */
+    private val NAME_PATTERN = Regex("^[A-Za-z0-9_]+$")
 
     /**
      * 删除账号。
@@ -181,6 +210,27 @@ object AccountService {
         UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
             .toString()
             .replace("-", "")
+}
+
+/**
+ * 新增离线账号的结果。
+ *
+ * 用 sealed 类型而不是 `AccountProfile?`：界面对每种失败要给出不同的提示
+ * （名字不合法 / 重名 / 存储写不进去），只回 null 的话用户只能看到「失败」，
+ * 不知道要改什么。
+ */
+sealed interface OfflineAccountResult {
+    /** 创建成功。 */
+    data class Success(val profile: AccountProfile) : OfflineAccountResult
+
+    /** 用户名不符合规则。`reason` 可直接展示给用户。 */
+    data class InvalidName(val reason: String) : OfflineAccountResult
+
+    /** 该名字的离线账号已存在。 */
+    data class DuplicateName(val name: String) : OfflineAccountResult
+
+    /** 写入失败，`reason` 为底层原因。 */
+    data class Failed(val reason: String) : OfflineAccountResult
 }
 
 /**

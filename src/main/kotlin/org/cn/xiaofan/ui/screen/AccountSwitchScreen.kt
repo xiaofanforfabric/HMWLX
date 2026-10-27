@@ -70,12 +70,18 @@ fun AccountSwitchScreen(
     var groups by remember { mutableStateOf(emptyMap<AccountService.AccountGroup, List<AccountProfile>>()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showAddOffline by remember { mutableStateOf(false) }
 
     // 读账号列表是 IO 操作（要读 headlessmc 的存储文件），
     // 但这里数据量很小、又在容器已就绪之后，直接在主线程读不会造成可感知的卡顿。
     LaunchedEffect(Unit) {
         groups = AccountService.groupedAccounts()
         loading = false
+    }
+
+    /** 重新拉一次列表 —— 新增/删除账号后都要调用。 */
+    fun reloadGroups() {
+        groups = AccountService.groupedAccounts()
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -128,8 +134,7 @@ fun AccountSwitchScreen(
                     Spacer(Modifier.height(8.dp))
 
                     OutlinedButton(
-                        onClick = { },
-                        enabled = false,
+                        onClick = { showAddOffline = true },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(text(TextKey.ACCOUNT_LOGIN_OFFLINE))
@@ -155,6 +160,23 @@ fun AccountSwitchScreen(
                 }
             }
         }
+    }
+
+    if (showAddOffline) {
+        AddOfflineAccountDialog(
+            onCreated = { created ->
+                showAddOffline = false
+                reloadGroups()
+                // 新建后直接切过去：用户点了「添加离线账号」就是打算用它，
+                // 建完还得再点一次列表太啰嗦。
+                if (AccountService.switchTo(created)) {
+                    onSwitched(created)
+                } else {
+                    error = "账号已创建，但切换失败：${created.name}"
+                }
+            },
+            onDismiss = { showAddOffline = false },
+        )
     }
 }
 

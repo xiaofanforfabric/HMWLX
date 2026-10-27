@@ -81,6 +81,38 @@ object TextKey {
     /** 登录第三方外置登录账号按钮。 */
     const val ACCOUNT_LOGIN_YGGDRASIL = "account.login.yggdrasil"
 
+    // --- 添加离线账号 ---
+
+    /** 对话框标题。 */
+    const val ACCOUNT_ADD_OFFLINE_TITLE = "account.add.offline.title"
+
+    /** 对话框说明文字。 */
+    const val ACCOUNT_ADD_OFFLINE_DESC = "account.add.offline.desc"
+
+    /** 用户名输入框标签。 */
+    const val ACCOUNT_ADD_OFFLINE_LABEL = "account.add.offline.label"
+
+    /** 用户名过短。 */
+    const val ACCOUNT_ADD_OFFLINE_TOO_SHORT = "account.add.offline.too.short"
+
+    /** 用户名过长。 */
+    const val ACCOUNT_ADD_OFFLINE_TOO_LONG = "account.add.offline.too.long"
+
+    /** 用户名含非法字符。 */
+    const val ACCOUNT_ADD_OFFLINE_INVALID_CHARS = "account.add.offline.invalid.chars"
+
+    /** 重名。`{0}` 为用户名。 */
+    const val ACCOUNT_ADD_OFFLINE_DUPLICATE = "account.add.offline.duplicate"
+
+    /** 创建失败。`{0}` 为原因。 */
+    const val ACCOUNT_ADD_OFFLINE_FAILED = "account.add.offline.failed"
+
+    /** 确定按钮。 */
+    const val ACCOUNT_ADD_OFFLINE_CONFIRM = "account.add.offline.confirm"
+
+    /** 取消按钮。 */
+    const val ACCOUNT_ADD_OFFLINE_CANCEL = "account.add.offline.cancel"
+
     // --- 用户协议 ---
 
     /** 开屏标题，如「请先阅读用户协议」。 */
