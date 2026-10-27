@@ -18,6 +18,11 @@ jobs:
   test:
     name: Test (JDK 25)
     runs-on: ubuntu-latest
+    env:
+      # 测试方法名是中文，报告文件名也是中文；没有 UTF-8 locale 时
+      # JDK 会用 ASCII 建文件名并抛 "Malformed input or input contains unmappable characters"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +53,9 @@ jobs:
   build:
     name: Build (release-intent commit)
     runs-on: ubuntu-latest
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     # 仅当提交信息以 rel: / beta: / RC: / test: 开头时才构建
     # 注意：PR 事件的 head commit message 取 github.event.pull_request.title 不准确，
     # 这里统一用 head_commit.message；PR 场景下退化为 github.sha 对应的提交。

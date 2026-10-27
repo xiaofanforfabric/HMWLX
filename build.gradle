@@ -1,20 +1,7 @@
-buildscript {
-    repositories {
-        // 走腾讯云镜像，不要把 Maven Central 放在首位：
-        // CI（如 CNB 构建机）里直连 repo.maven.apache.org 会被 429 Too Many Requests 拦下，
-        // 表现为 "Could not resolve all artifacts for configuration 'classpath'"。
-        // 镜像对四个插件 marker（kotlin.jvm / kotlin.plugin.compose / compose / quarkus）均有代理。
-        maven {
-            name = 'TencentCloudGradlePlugin'
-            url = 'https://mirrors.cloud.tencent.com/nexus/repository/gradle-plugins/'
-        }
-        maven {
-            name = 'TencentCloud'
-            url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
-        }
-        gradlePluginPortal()
-    }
-}
+// 插件与插件自身的传递依赖全部由 settings.gradle 的 pluginManagement 决定，
+// 这里不再声明 buildscript.repositories：声明了反而会覆盖 pluginManagement，
+// 与其中的 exclusiveContent 冲突（Gradle 9 直接拒绝）。
+// 插件 marker 和插件 jar 都在腾讯云 gradle-plugins，其余依赖回落到阿里云/华为云镜像。
 
 plugins {
     id 'org.jetbrains.kotlin.jvm' version '2.3.20'
@@ -44,23 +31,9 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
-repositories {
-    // JitPack 放最前：headlessmc 及全部子模块只存在于 JitPack。
-    // 腾讯云镜像虽然也代理 jitpack，但存在两类问题：
-    //   1. 部分构件（如 headlessmc-auth-webview 的 pom）未缓存，返回 404
-    //   2. 高并发下超时，超时结果会被缓存成"未找到"
-    // 因此让 Gradle 先去真正的 JitPack，镜像只作兜底加速。
-    maven {
-        name = 'JitPack'
-        url = 'https://jitpack.io'
-    }
-    maven {
-        name = 'TencentCloud'
-        url = 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
-        allowInsecureProtocol = false
-    }
-    mavenCentral()
-}
+// 依赖仓库统一在 settings.gradle 的 dependencyResolutionManagement 里声明，
+// 这里不再重复：项目级的 repositories 会覆盖 settings 的那份，
+// 两处各写一份必然漂移（本次 CI 失败就是因为这里少了镜像兜底）。
 
 dependencies {
     // headlessmc：Quarkus + CDI + Picocli 应用，进程内嵌入
@@ -85,6 +58,12 @@ dependencies {
 
 test {
     useJUnitPlatform()
+
+    // 测试方法名是中文，HTML 报告的文件名也是中文（如 `容器能启动并取到-CommandLine-bean().html`）。
+    // 文件名编码取决于 JVM 的 LANG，所以 CI 里显式设了 LANG=C.UTF-8（见 .cnb.yml / ci.yml）；
+    // 这里再把测试 JVM 的默认字符集钉成 UTF-8，保证读源码、输出日志不乱码。
+    systemProperty 'file.encoding', 'UTF-8'
+    defaultCharacterEncoding = 'UTF-8'
     // 进程内启动 headlessmc 的 Quarkus 容器所需的两个构建产物：
     //   1. generated-bytecode.jar   —— io.quarkus.runner.ApplicationImpl 与各 bean 的 _Bean/_ClientProxy
     //   2. transformed-bytecode.jar —— Quarkus 在构建期改写过的类
