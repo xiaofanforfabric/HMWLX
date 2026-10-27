@@ -1,0 +1,56 @@
+# CNB 云原生构建配置
+#
+# 规则：
+#   - 任意分支 push / PR 都跑全部测试
+#   - 提交信息以 rel: / beta: / RC: / test: 开头时，额外跑 build
+#
+# JDK：headlessmc 3.0.0-RC10-cn.* 的 class 文件要求 JVM 25+，
+#      因此统一使用带 JDK 25 的镜像。
+#
+# ${CNB_COMMIT_MESSAGE_TITLE} 是提交信息首行，
+# 用 grep -qE '^(rel|beta|RC|test):' 判断是否为发布意图提交。
+
+# 兜底：所有分支
+"**":
+  push:
+    - name: ci
+      docker:
+        image: eclipse-temurin:25-jdk
+        volumes:
+          # Gradle 缓存跨构建复用，避免每次重下依赖
+          - main:/root/.gradle:copy-on-write
+      stages:
+        - name: run-tests
+          script: |
+            chmod +x ./gradlew
+            ./gradlew test --no-daemon --stacktrace
+
+        # 仅 release-intent 提交才构建
+        - name: build
+          if: |
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qE '^(rel|beta|RC|test):'
+          script: |
+            chmod +x ./gradlew
+            ./gradlew build --no-daemon --stacktrace
+
+        - name: show-artifacts
+          if: |
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qE '^(rel|beta|RC|test):'
+          script: |
+            echo "=== build/libs ==="
+            ls -la build/libs/ 2>/dev/null || true
+            echo "=== build/quarkus-app ==="
+            ls -la build/quarkus-app/ 2>/dev/null || true
+
+  pull_request:
+    - name: pr-check
+      docker:
+        image: eclipse-temurin:25-jdk
+        volumes:
+          # PR 场景缓存只读，避免并发写入冲突
+          - main:/root/.gradle:copy-on-write-read-only
+      stages:
+        - name: run-tests
+          script: |
+            chmod +x ./gradlew
+            ./gradlew test --no-daemon --stacktrace

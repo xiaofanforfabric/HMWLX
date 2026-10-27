@@ -1,0 +1,82 @@
+name: CI
+
+# 触发规则
+# - 任何 push / PR 都跑全部测试
+# - 提交信息以 rel: / beta: / RC: / test: 开头时额外跑 build（产物可能为空）
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支的旧任务自动取消，避免排队
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (JDK 25)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # headlessmc 3.0.0-RC10-cn.* 的 class 文件要求 JVM 25+，
+      # 低版本会直接报 "only compatible with JVM runtime version 25 or newer"。
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # GUI 相关：Compose Desktop 在无头环境跑不了窗口，
+      # 但容器启动测试（BootstrapTest）需要 Skiko/JDK 的 headless 支持。
+      - name: Run all tests
+        run: ./gradlew test --no-daemon --stacktrace
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/test
+          if-no-files-found: ignore
+
+  build:
+    name: Build (release-intent commit)
+    runs-on: ubuntu-latest
+    # 仅当提交信息以 rel: / beta: / RC: / test: 开头时才构建
+    # 注意：PR 事件的 head commit message 取 github.event.pull_request.title 不准确，
+    # 这里统一用 head_commit.message；PR 场景下退化为 github.sha 对应的提交。
+    if: |
+      startsWith(github.event.head_commit.message, 'rel:') ||
+      startsWith(github.event.head_commit.message, 'beta:') ||
+      startsWith(github.event.head_commit.message, 'RC:') ||
+      startsWith(github.event.head_commit.message, 'test:') ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew build --no-daemon --stacktrace
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmylx-build
+          path: |
+            build/libs/*.jar
+            build/quarkus-app/
+          if-no-files-found: ignore
