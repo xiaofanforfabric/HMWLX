@@ -8,12 +8,12 @@ import androidx.compose.ui.window.rememberWindowState
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
-import org.cn.xiaofan.ui.HmyLxApp
+import org.cn.xiaofan.ui.HmwLxApp
 
 /**
- * HMYLX 桌面端入口。
+ * HMWLX 桌面端入口。
  *
- * <p>Quarkus 容器在 [HmyLxApp] 的 LaunchedEffect 里于后台线程启动，
+ * <p>Quarkus 容器在 [HmwLxApp] 的 LaunchedEffect 里于后台线程启动，
  * 窗口可以先显示出来，用户看到的是加载状态而不是空白。
  */
 fun main() = application {
@@ -27,6 +27,6 @@ fun main() = application {
         state = windowState,
         title = Messages.get(TextKey.WINDOW_TITLE)
     ) {
-        HmyLxApp()
+        HmwLxApp()
     }
 }

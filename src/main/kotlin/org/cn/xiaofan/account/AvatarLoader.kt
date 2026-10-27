@@ -99,7 +99,7 @@ object AvatarLoader {
      * ```
      *
      * 手写正则而非引入 Jackson：这里只需要两个字段，
-     * 而 headlessmc 的 Jackson 版本与 HMYLX 不一定一致，避免依赖冲突。
+     * 而 headlessmc 的 Jackson 版本与 HMWLX 不一定一致，避免依赖冲突。
      */
     private fun resolveSkinUrl(profileJson: String): String? {
         val matcher = TEXTURES_VALUE.matcher(profileJson)
@@ -120,7 +120,7 @@ object AvatarLoader {
         connection.readTimeout = TIMEOUT_MS
         connection.instanceFollowRedirects = true
         // Mojang 与部分皮肤站对 UA 有校验，缺失可能返回 403
-        connection.setRequestProperty("User-Agent", "HMYLX/1.0")
+        connection.setRequestProperty("User-Agent", "HMWLX/1.0")
         return try {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) null
             else connection.inputStream.use { it.readBytes() }

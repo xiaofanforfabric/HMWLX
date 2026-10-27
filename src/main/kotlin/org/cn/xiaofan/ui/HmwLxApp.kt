@@ -60,7 +60,7 @@ sealed interface BootState {
  * 账号栏在容器就绪后才显示 —— 因为账号信息要通过 CDI 从 headlessmc 读取。
  */
 @Composable
-fun HmyLxApp() {
+fun HmwLxApp() {
     var state by remember { mutableStateOf<BootState>(BootState.Loading) }
 
     LaunchedEffect(Unit) {
@@ -118,19 +118,19 @@ private fun ColumnScope.ContentArea(content: @Composable () -> Unit) {
  */
 private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
     try {
-        println("[HMYLX] 正在启动 headlessmc 容器…")
+        println("[HMWLX] 正在启动 headlessmc 容器…")
         HeadlessMcBootstrap.start()
-        println("[HMYLX] 容器已就绪，状态=${HeadlessMcBootstrap.currentState()}")
+        println("[HMWLX] 容器已就绪，状态=${HeadlessMcBootstrap.currentState()}")
 
         val account = AccountResolver.current()
-        println("[HMYLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
-        println("[HMYLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
+        println("[HMWLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
+        println("[HMWLX] 头像地址: ${account.avatarUrl ?: "<无>"}")
 
         val detail = readHeadlessMcInfo()
-        println("[HMYLX] 桥接信息:\n$detail")
+        println("[HMWLX] 桥接信息:\n$detail")
         BootState.Ready(account = account, detail = detail)
     } catch (t: Throwable) {
-        println("[HMYLX] 容器启动失败: ${t.message}")
+        println("[HMWLX] 容器启动失败: ${t.message}")
         t.printStackTrace()
         BootState.Failed(t.message ?: t.javaClass.simpleName, t)
     }

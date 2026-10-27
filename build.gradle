@@ -97,7 +97,7 @@ application {
 // 的打包方式冲突：Compose 的依赖树里有同名但不同内容的 jar（如
 // runtime-saveable-desktop 与 org.jetbrains.compose 的同名产物），
 // distTar/distZip 会因为 duplicate entry 直接失败。
-// HMYLX 用 Compose 自己的打包方式，因此禁用这几个任务。
+// HMWLX 用 Compose 自己的打包方式，因此禁用这几个任务。
 tasks.matching { it.name in ['distZip', 'distTar', 'installDist', 'startScripts'] }.configureEach {
     enabled = false
 }
