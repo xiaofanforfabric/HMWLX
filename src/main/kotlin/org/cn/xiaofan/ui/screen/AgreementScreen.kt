@@ -22,10 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -45,15 +42,23 @@ import org.cn.xiaofan.legal.UserAgreement
  * <p>是否需要展示由调用方根据 `AppConfig.isLegalAccepted()` 决定，
  * 本组件只负责展示与回调。
  *
+ * <p>「拒绝并退出」的二次确认状态由调用方持有：窗口标题栏的 X 在协议页
+ * 也要走同一个确认流程，状态放在这里会让两边各弹一个框。
+ *
  * @param onAccept 用户点击「同意」，由调用方负责写回配置并进入主界面
+ * @param showDeclineConfirm 是否展示拒绝确认弹窗
+ * @param onDeclineRequest 用户请求拒绝（点按钮或窗口 X），由调用方弹出确认
+ * @param onDeclineDismiss 用户取消拒绝
  * @param onDecline 用户确认「拒绝并退出」，由调用方负责退出应用
  */
 @Composable
 fun AgreementScreen(
     onAccept: () -> Unit,
+    showDeclineConfirm: Boolean,
+    onDeclineRequest: () -> Unit,
+    onDeclineDismiss: () -> Unit,
     onDecline: () -> Unit,
 ) {
-    var confirmExit by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -78,26 +83,23 @@ fun AgreementScreen(
 
             AgreementActions(
                 onAccept = onAccept,
-                onDecline = { confirmExit = true },
+                onDecline = onDeclineRequest,
             )
         }
     }
 
-    if (confirmExit) {
+    if (showDeclineConfirm) {
         AlertDialog(
-            onDismissRequest = { confirmExit = false },
+            onDismissRequest = onDeclineDismiss,
             title = { Text(text(TextKey.AGREEMENT_DECLINE_CONFIRM_TITLE)) },
             text = { Text(text(TextKey.AGREEMENT_DECLINE_CONFIRM_BODY)) },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmExit = false
-                    onDecline()
-                }) {
+                TextButton(onClick = onDecline) {
                     Text(text(TextKey.AGREEMENT_DECLINE_CONFIRM_OK))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmExit = false }) {
+                TextButton(onClick = onDeclineDismiss) {
                     Text(text(TextKey.AGREEMENT_DECLINE_CONFIRM_CANCEL))
                 }
             },

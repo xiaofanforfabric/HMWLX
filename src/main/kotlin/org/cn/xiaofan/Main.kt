@@ -36,11 +36,14 @@ fun main() = application {
     // 配置读取失败（文件损坏、无权限）时按「未同意」处理，倾向于弹窗。
     val agreedAtStartup = remember { AppConfig.isLegalAccepted() }
     val showAgreement = remember { mutableStateOf(!agreedAtStartup) }
+    val showDeclineConfirm = remember { mutableStateOf(false) }
 
     Window(
         onCloseRequest = {
             HeadlessMcBootstrap.shutdown()
-            exitApplication()
+            // 协议页点 X 等同于「不同意并退出」，同样走二次确认，
+            // 不然右上角就成了绕过协议的后门。主界面里 X 保持原样，直接退出。
+            if (showAgreement.value) showDeclineConfirm.value = true else exitApplication()
         },
         state = windowState,
         title = Messages.get(TextKey.WINDOW_TITLE)
@@ -48,10 +51,17 @@ fun main() = application {
         if (showAgreement.value) {
             AgreementScreen(
                 onAccept = {
-                    AppConfig.setLegalAccepted(true)
+                    if (!AppConfig.setLegalAccepted(true)) {
+                        // 写不进去也放行：下次启动再弹一遍，不该让人用不了软件。
+                        System.err.println("用户协议同意状态写入失败，配置路径: ${AppConfig.configPath()}")
+                    }
                     showAgreement.value = false
                 },
+                showDeclineConfirm = showDeclineConfirm.value,
+                onDeclineRequest = { showDeclineConfirm.value = true },
+                onDeclineDismiss = { showDeclineConfirm.value = false },
                 onDecline = {
+                    showDeclineConfirm.value = false
                     HeadlessMcBootstrap.shutdown()
                     // 用 exitProcess 而不是 exitApplication：拒绝协议属于主动终止，
                     // 需要立刻结束进程，避免 Compose 的窗口销毁流程拖出多余的动画与日志。
