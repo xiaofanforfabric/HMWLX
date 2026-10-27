@@ -9,8 +9,8 @@ Hello My World Launcher X 用户协议
 序言
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-本协议是您（以下称"用户"或"您"）与 Hello My World Launcher X（以下称
-"HMWLX"）开发者之间就使用 HMWLX 软件所达成的协议。
+本协议是您（以下称“用户”或“您”）与 Hello My World Launcher X（以下称
+“HMWLX”）开发者之间就使用 HMWLX 软件所达成的协议。
 
 请在安装或使用 HMWLX 前完整阅读本协议。您开始使用 HMWLX，即表示您已阅读、
 理解并同意本协议的全部内容。若您不同意本协议的任何条款，请立即停止使用并
@@ -38,7 +38,7 @@ Hello My World Launcher X 用户协议
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 2.1  headlessMC 与 HMWLX 均尽力严格遵守 Minecraft 最终用户许可协议
-     （End User License Agreement，下称"EULA"）。
+     （End User License Agreement，下称“EULA”）。
 
 2.2  用户在使用 HMWLX 时，同样须遵守 EULA 及 Mojang Studios、Microsoft
      就 Minecraft 所制定的其他相关条款。
@@ -57,8 +57,8 @@ Hello My World Launcher X 用户协议
 3.2  HMWLX 同样不允许用户在未购买 Minecraft 的情况下游玩 Minecraft。
 
 3.3  鉴于中国大陆网络环境的特殊性，HMWLX 允许用户在离线状态下启动游戏，
-     但前提是：用户此前已使用一个**已购买 Minecraft 的 Microsoft 账号**
-     成功完成过在线验证。
+     但前提是：用户此前已使用一个已购买 Minecraft 的 Microsoft 账号成功
+     完成过在线验证。
 
 3.4  HMWLX 会在网络可用时静默重新验证账号状态。若验证结果显示账号状态异常
      （包括但不限于退款、封禁、凭证失效），该账号凭据将立即失效，用户须
@@ -79,8 +79,8 @@ Hello My World Launcher X 用户协议
 4.1  HMWLX 与 headlessMC 默认均从 Minecraft 官方分发渠道下载游戏资源，
      严格遵守 EULA。
 
-4.2  鉴于中国大陆网络环境，HMWLX 允许用户在**高级设置**中自行配置自定义
-     下载源。
+4.2  鉴于中国大陆网络环境，HMWLX 允许用户在高级设置中自行配置自定义下载
+     源。
 
 4.3  HMWLX 不提供、不推荐、不审核、不背书任何第三方下载源地址，无论该
      地址是否获得相关授权。用户所填写的任何第三方地址均与 HMWLX 及其
@@ -105,7 +105,7 @@ Hello My World Launcher X 用户协议
 第六条  责任限制
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-6.1  本软件按"现状"（AS IS）提供，不附带任何明示或暗示的担保，包括但不
+6.1  本软件按“现状”（AS IS）提供，不附带任何明示或暗示的担保，包括但不
      限于对适销性、特定用途适用性及不侵权的担保。
 
 6.2  因使用第三方下载源、修改启动参数、或通过非官方渠道获取的游戏文件所
@@ -134,7 +134,7 @@ Hello My World Launcher X 用户协议
 第八条  其他
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-8.1  "Minecraft"为 Microsoft Corporation 及/或 Mojang Studios 的商标。
+8.1  “Minecraft”为 Microsoft Corporation 及/或 Mojang Studios 的商标。
      HMWLX 为独立第三方项目，与 Microsoft、Mojang Studios 及 headlessMC
      官方无隶属、合作或背书关系。
 

@@ -77,6 +77,13 @@ test {
         files(layout.buildDirectory.file('quarkus-app/quarkus/generated-bytecode.jar')) +
         classpath
     dependsOn 'quarkusBuild'
+
+    // 协议一致性的测试要读 LEGAL/用户协议.txt，但它不在 src/ 下面，
+    // 不显式声明的话 Gradle 认为输入没变，改了 txt 也不会重跑测试，
+    // CI 上就会拿上一次的成功结果放行 —— 等于比对形同虚设。
+    inputs.file('LEGAL/用户协议.txt')
+        .withPropertyName('legalAgreementText')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // Compose Desktop 运行入口。
