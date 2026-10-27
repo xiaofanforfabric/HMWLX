@@ -173,8 +173,12 @@ object AccountResolver {
     /**
      * 定位 headlessmc 的配置文件。
      *
-     * 与 headlessmc 的 `AppFiles.getConfigDir()` 保持一致：
-     * - Linux：`$XDG_CONFIG_HOME/headlessmc`，默认 `~/.config/headlessmc`
+     * 与 headlessmc 的 `DefaultAppFiles.getConfigDir()` 保持一致。
+     * 该方法的字节码是：`XdgBaseDirectories.configHome().resolve("headlessmc")`，
+     * 即**遵循 XDG 规范**：
+     * - Linux：`$XDG_CONFIG_HOME/headlessmc`，未设置时默认 `~/.config/headlessmc`
+     *   （实测 headlessmc 3.0.0-RC10-cn.* 的配置就在 `~/.config/headlessmc/config.properties`，
+     *   `~/.headlessmc` 并不存在）
      * - Windows：`%APPDATA%/headlessmc`
      * - macOS：`~/Library/Application Support/headlessmc`
      */

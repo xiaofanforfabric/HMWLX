@@ -46,9 +46,16 @@ fun AccountBar(
     profile: AccountProfile,
     modifier: Modifier = Modifier,
 ) {
-    var avatar by remember(profile.uuid) { mutableStateOf<ImageBitmap?>(null) }
+    // key 必须与下面的 LaunchedEffect 完全一致（uuid + avatarUrl）。
+    // 若只按 uuid 记忆，同一账号的 avatarUrl 变化时（改配置后重启、或系统属性覆盖），
+    // 状态不会重置，上一张头像会残留在界面上。
+    var avatar by remember(profile.uuid, profile.avatarUrl) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
 
     LaunchedEffect(profile.uuid, profile.avatarUrl) {
+        // 先清空再加载：避免 URL 切换后新旧图混在一起
+        avatar = null
         avatar = profile.avatarUrl?.let { AvatarLoader.load(it) }
     }
 

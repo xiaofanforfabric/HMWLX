@@ -3,6 +3,7 @@ package org.cn.xiaofan.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,25 +71,42 @@ fun HmyLxApp() {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 when (val current = state) {
-                    is BootState.Loading -> LoadingScreen()
+                    is BootState.Loading -> ContentArea {
+                        LoadingScreen()
+                    }
                     is BootState.Ready -> {
                         AccountBar(profile = current.account)
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
+                        // weight(1f) 让内容区吃掉账号栏之外的**剩余**高度。
+                        // 这里不能用 fillMaxSize()：Column 内的 fillMaxSize 会按父约束的
+                        // 完整高度测量，总高变成 账号栏 + 整窗高，超出部分被裁掉，
+                        // 居中的内容会偏到看不见的位置。
+                        ContentArea {
                             ReadyScreen(current.detail)
                         }
                     }
-                    is BootState.Failed -> Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    is BootState.Failed -> ContentArea {
                         FailedScreen(current)
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 内容区：占满 [Column] 里的剩余高度，内容居中。
+ *
+ * 抽出来是因为三个分支都要同一份约束逻辑，避免复制粘贴时再次写错成 `fillMaxSize()`。
+ */
+@Composable
+private fun ColumnScope.ContentArea(content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
