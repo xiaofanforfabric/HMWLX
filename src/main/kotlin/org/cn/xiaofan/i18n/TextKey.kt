@@ -177,9 +177,6 @@ object TextKey {
     /** 右侧面板页签：版本。 */
     const val PANEL_VERSIONS = "panel.versions"
 
-    /** 右侧面板：返回上一页。 */
-    const val PANEL_BACK = "panel.back"
-
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 

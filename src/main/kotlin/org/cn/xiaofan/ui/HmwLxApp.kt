@@ -1,8 +1,6 @@
 package org.cn.xiaofan.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewList
@@ -48,7 +45,6 @@ import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
-import org.cn.xiaofan.version.GameVersion
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -73,7 +69,7 @@ sealed interface BootState {
  *
  * 布局：背景图铺满，左侧留空让图自己露出来，右侧是一块半透明面板放所有操作。
  *
- * <p>为什么面板靠右而不是居中：背景图的主体（海面、山脊、「CrazyWaterWorldislaunched」
+ * <p>为什么面板靠右而不是居中：背景图的主体（海面、山脊、「CrazyWaterWorldislaunched」(这个叫疯狂水世界,启动!!!)
  * 那种构图）通常在左侧或中部，面板压右边最不挡画面，也符合"启动器"的操作习惯
  * ——眼睛先看图，手往右下角找按钮。
  *
@@ -132,7 +128,6 @@ fun HmwLxApp() {
 
                     Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         // 主区域：功能页的内容放这里，占满除侧栏外的全部空间。
-                        // 首页时这里是空的，背景图直接露出来 —— 那正是首页该有的样子。
                         // 内边距加在这一层而不是 Row 上：Row 加了 padding 会把侧栏
                         // 一起往里推，侧栏就接不到窗口右边界了。
                         Box(
@@ -140,24 +135,52 @@ fun HmwLxApp() {
                                 .weight(1f)
                                 .fillMaxHeight()
                                 .padding(16.dp),
+                            // 加载与失败居中显示。这两个状态没有内容页可言，
+                            // 居中是唯一合理的排布；首页/版本页各自管自己的布局，
+                            // 所以居中约束只加在下面两个分支上，不影响它们。
                         ) {
-                            if (panel == MainPanel.VERSIONS && ready != null) {
-                                VersionListScreen(onLaunch = { version ->
-                                    // TODO(human): 启动链路。
-                                    // 现在只把选中版本落进日志，确认参数传对了；
-                                    // 真正的实现分三步，各自独立：
-                                    //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-                                    //      inheritsFrom 链展开成完整启动参数
-                                    //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
-                                    //      并用当前账号（AccountService.currentAccount）生成
-                                    //      --uuid / --accessToken / --userType
-                                    //   3. 起子进程并把 stdout 接到界面上的日志面板
-                                    // 三步都能单独测：1 和 2 是纯函数，只有 3 需要真起进程。
-                                    println(
-                                        "[HMWLX] 请求启动版本 ${version.id} " +
-                                            "(类型=${version.type}, 父版本=${version.inheritsFrom})"
-                                    )
-                                })
+                            when (val current = state) {
+                                // 容器还在起：主区域必须给出反馈。只在侧栏里转个
+                                // 20dp 的圈，用户会以为界面挂了。
+                                is BootState.Loading -> Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    LoadingScreen()
+                                }
+
+                                // 失败原因必须占满主区域：报错文案可能很长
+                                // （类找不到、依赖冲突的整条异常链），
+                                // 挤在 168dp 的侧栏里根本读不了。
+                                is BootState.Failed -> Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    FailedScreen(current)
+                                }
+
+                                // 就绪后主区域交给当前页。首页时这里是空的，
+                                // 背景图直接露出来 —— 那正是首页该有的样子。
+                                is BootState.Ready -> when (panel) {
+                                    MainPanel.HOME -> Unit
+
+                                    MainPanel.VERSIONS -> VersionListScreen(onLaunch = { version ->
+                                        // TODO(human): 启动链路。
+                                        // 现在只把选中版本落进日志，确认参数传对了；
+                                        // 真正的实现分三步，各自独立：
+                                        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
+                                        //      inheritsFrom 链展开成完整启动参数
+                                        //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
+                                        //      并用当前账号（AccountService.currentAccount）生成
+                                        //      --uuid / --accessToken / --userType
+                                        //   3. 起子进程并把 stdout 接到界面上的日志面板
+                                        // 三步都能单独测：1 和 2 是纯函数，只有 3 需要真起进程。
+                                        println(
+                                            "[HMWLX] 请求启动版本 ${version.id} " +
+                                                "(类型=${version.type}, 父版本=${version.inheritsFrom})"
+                                        )
+                                    })
+                                }
                             }
                         }
 
@@ -194,8 +217,8 @@ private val SIDEBAR_WIDTH = 168.dp
 /**
  * 侧栏白底不透明度。
  *
- * <p>0.96 是很实的白：这块底就是拿来托黑字的，透多了字就糊在背景图上。
- * 留 4% 只为让人还能感觉到后面有背景图，不是为了透出画面内容。
+ * <p>AI理解反了,我要的是尽量能保证看清字符且尽量凸显背景,不是一团白糊上去。
+ * 所以调整val变量到0.40f刚好满足这个要求。
  */
 private const val SIDEBAR_ALPHA = 0.40f
 
