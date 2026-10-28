@@ -22,7 +22,7 @@ class AvatarErrorTest {
     @Test
     fun `没有 textures 字段的返回体不算失败`() {
         // 账号存在但没配皮肤时，Mojang 返回的正是这种结构
-        val json = """{"id":"6e1b53d1d50b4d8f88b952c8bd47c7f0","name":"xiaofanbot","properties":[]}"""
+        val json = """{"id":"5116c225ff07399689019e809826e635","name":"TestPlayer1","properties":[]}"""
 
         assertNull(AvatarLoader.debugResolveSkinUrl(json), "没有 textures 应该解析出 null")
     }

@@ -37,7 +37,7 @@ class OfflineAccountNameTest {
             "ab",
             "abc",
             "Steve",
-            "xiaofanbot",
+            "TestPlayer1",
             "Player_123",
             "0123456789abcdef",   // 刚好 16
         ).forEach { assertNull(validate(it), "「$it」应通过校验") }

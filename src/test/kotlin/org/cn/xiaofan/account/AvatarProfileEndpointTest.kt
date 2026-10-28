@@ -25,7 +25,7 @@ class AvatarProfileEndpointTest {
     @Test
     fun `识别 Mojang 官方的 profile 地址`() {
         val url = "https://sessionserver.mojang.com/session/minecraft/profile/" +
-            "6e1b53d1d50b4d8f88b952c8bd47c7f0"
+            "5116c225ff07399689019e809826e635"
         assertTrue(pattern.matches(url), "Mojang 的 profile 地址必须被识别: $url")
     }
 
@@ -45,14 +45,16 @@ class AvatarProfileEndpointTest {
 
     @Test
     fun `能从 Mojang 真实返回体里解析出皮肤地址`() {
-        // 真实返回体（取自 sessionserver.mojang.com，2026-10 实测）
+        // 真实返回体的**结构**，UUID / 名字 / 纹理内容已替换为虚构值。
+        // 不要在这里填自己账号的真实数据：base64 里就编着 uuid 和玩家名，
+        // 一旦提交就留在 git 历史里了。
         val json = """
             {
-              "id" : "6e1b53d1d50b4d8f88b952c8bd47c7f0",
-              "name" : "xiaofanbot",
+              "id" : "5116c225ff07399689019e809826e635",
+              "name" : "TestPlayer1",
               "properties" : [ {
                 "name" : "textures",
-                "value" : "ewogICJ0aW1lc3RhbXAiIDogMTc5MzExNzg1MDY4NCwKICAicHJvZmlsZUlkIiA6ICI2ZTFiNTNkMWQ1MGI0ZDhmODhiOTUyYzhiZDQ3YzdmMCIsCiAgInByb2ZpbGVOYW1lIiA6ICJ4aWFvZmFuYm90IiwKICAidGV4dHVyZXMiIDogewogICAgIlNLSU4iIDogewogICAgICAidXJsIiA6ICJodHRwOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlLzkwZTc1Y2Q0MjliYTYzMzFjZDIxMGI5YmQxOTM5OTUyN2VlM2JhYjQ2N2I1YTlmNjFjYjhhMjdiMTc3ZjY3ODkiCiAgICB9CiAgfQp9"
+                "value" : "eyJ0aW1lc3RhbXAiOiAxNzkzMTE3ODUwNjg0LCAicHJvZmlsZUlkIjogIjUxMTZjMjI1ZmYwNzM5OTY4OTAxOWU4MDk4MjZlNjM1IiwgInByb2ZpbGVOYW1lIjogIlRlc3RQbGF5ZXIxIiwgInRleHR1cmVzIjogeyJTS0lOIjogeyJ1cmwiOiAiaHR0cDovL3RleHR1cmVzLm1pbmVjcmFmdC5uZXQvdGV4dHVyZS8wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn19fQ=="
               } ],
               "profileActions" : [ ]
             }

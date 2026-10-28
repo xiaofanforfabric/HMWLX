@@ -143,6 +143,29 @@ object TextKey {
     /** 确定按钮。 */
     const val ACCOUNT_ADD_OFFLINE_CONFIRM = "account.add.offline.confirm"
 
+    // --- 退出登录（移除账号） ---
+
+    /** 行内删除按钮的无障碍描述。`{0}` 为用户名。 */
+    const val ACCOUNT_REMOVE_DESCRIPTION = "account.remove.description"
+
+    /** 确认对话框标题。`{0}` 为用户名。 */
+    const val ACCOUNT_REMOVE_TITLE = "account.remove.title"
+
+    /** 确认对话框正文。`{0}` 为用户名。 */
+    const val ACCOUNT_REMOVE_BODY = "account.remove.body"
+
+    /** 确认按钮。 */
+    const val ACCOUNT_REMOVE_CONFIRM = "account.remove.confirm"
+
+    /** 取消按钮。 */
+    const val ACCOUNT_REMOVE_CANCEL = "account.remove.cancel"
+
+    /** 删除失败。`{0}` 为用户名。 */
+    const val ACCOUNT_REMOVE_FAILED = "account.remove.failed"
+
+    /** 删除的是当前账号时的额外提示。 */
+    const val ACCOUNT_REMOVE_CURRENT_HINT = "account.remove.current.hint"
+
     /** 取消按钮。 */
     const val ACCOUNT_ADD_OFFLINE_CANCEL = "account.add.offline.cancel"
 
