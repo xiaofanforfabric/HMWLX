@@ -37,6 +37,7 @@ import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
+import org.cn.xiaofan.ui.screen.VersionListScreen
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -59,8 +60,11 @@ sealed interface BootState {
 /**
  * 应用主界面。
  *
- * 布局：顶部固定账号栏，下方是内容区。
+ * 布局：顶部固定账号栏，下方是内容区（版本列表）。
  * 账号栏在容器就绪后才显示 —— 因为账号信息要通过 CDI 从 headlessmc 读取。
+ *
+ * <p>版本列表不依赖容器：它读的是游戏目录里的文件，游戏目录能自己推出来。
+ * 容器挂了也照样能列出本机装了什么。
  */
 @Composable
 fun HmwLxApp() {
@@ -110,9 +114,33 @@ fun HmwLxApp() {
                             // weight(1f) 让内容区吃掉账号栏之外的**剩余**高度。
                             // 这里不能用 fillMaxSize()：Column 内的 fillMaxSize 会按父约束的
                             // 完整高度测量，总高变成 账号栏 + 整窗高，超出部分被裁掉，
-                            // 居中的内容会偏到看不见的位置。
-                            ContentArea {
-                                // 主界面内容还没做，暂时留空，背景图直接露出来。
+                            // 内容会偏到看不见的位置。
+                            //
+                            // 版本列表不走 [ContentArea]：它自己是左右两栏的布局，
+                            // 塞进居中的 Box 里只会得到一个按内容测量、尺寸不定的中间块。
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                            ) {
+                                VersionListScreen(
+                                    onLaunch = { version ->
+                                        // TODO(human): 启动链路。
+                                        // 现在只把选中版本和当前账号落进日志，确认参数传对了；
+                                        // 真正的实现分三步，各自独立：
+                                        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
+                                        //      inheritsFrom 链展开成完整启动参数
+                                        //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
+                                        //      并用当前账号（AccountService.currentAccount）生成
+                                        //      --uuid / --accessToken / --userType
+                                        //   3. 起子进程并把 stdout 接到界面上的日志面板
+                                        // 三步都能单独测：1 和 2 是纯函数，只有 3 需要真起进程。
+                                        println(
+                                            "[HMWLX] 请求启动版本 ${version.id} " +
+                                                "(类型=${version.type}, 父版本=${version.inheritsFrom})"
+                                        )
+                                    },
+                                )
                             }
                         }
                     }
@@ -132,7 +160,7 @@ fun HmwLxApp() {
  * 抽出来是因为三个分支都要同一份约束逻辑，避免复制粘贴时再次写错成 `fillMaxSize()`。
  *
  * <p>这里**不加底板**：内容直接浮在背景图上，图片才是主体。
- * 代价是文字必须自带可读性措施（浅色 + 阴影），见 [MainScreen]。
+ * 代价是文字必须自带可读性措施（浅色 + 阴影），见 [VersionListScreen]。
  */
 @Composable
 private fun ColumnScope.ContentArea(content: @Composable () -> Unit) {

@@ -36,6 +36,29 @@ class I18nTest {
             TextKey.ACCOUNT_LOGIN_MICROSOFT_REOPEN,
             TextKey.ACCOUNT_LOGIN_MICROSOFT_CLOSE,
             TextKey.ACCOUNT_LOGIN_MICROSOFT_FAILED,
+            TextKey.VERSION_LIST_TITLE,
+            TextKey.VERSION_REFRESH,
+            TextKey.VERSION_SCAN_FAILED,
+            TextKey.VERSION_EMPTY,
+            TextKey.VERSION_SELECT_HINT,
+            TextKey.VERSION_LAUNCH,
+            TextKey.VERSION_SETTINGS,
+            TextKey.VERSION_OPEN_DIR,
+            TextKey.VERSION_RESCAN,
+            TextKey.VERSION_TYPE_RELEASE,
+            TextKey.VERSION_TYPE_SNAPSHOT,
+            TextKey.VERSION_TYPE_OLD_BETA,
+            TextKey.VERSION_TYPE_OLD_ALPHA,
+            TextKey.VERSION_TYPE_OTHER,
+            TextKey.VERSION_DETAIL_TYPE,
+            TextKey.VERSION_DETAIL_LOADER,
+            TextKey.VERSION_DETAIL_LOADER_VANILLA,
+            TextKey.VERSION_DETAIL_MAIN_CLASS,
+            TextKey.VERSION_DETAIL_RELEASE_TIME,
+            TextKey.VERSION_DETAIL_GAME_DIR,
+            TextKey.VERSION_DETAIL_UNKNOWN,
+            TextKey.VERSION_MISSING_PARENT,
+            TextKey.VERSION_MISSING_PARENT_HINT,
         ).forEach { key ->
             val value = Messages.get(key)
             assertTrue(value.isNotBlank() && !value.startsWith("!"), "缺少文案: $key")
@@ -45,6 +68,7 @@ class I18nTest {
     @Test
     fun `占位符会被替换`() {
         assertEquals("已存在名为 Steve 的离线账号", Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_DUPLICATE, "Steve"))
+        assertEquals("游戏版本（3）", Messages.get(TextKey.VERSION_LIST_TITLE, 3))
         assertEquals("切换账号失败：boom", Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, "boom"))
     }
 
