@@ -174,6 +174,9 @@ object TextKey {
     /** 列表标题。`{0}` 为版本数量。 */
     const val VERSION_LIST_TITLE = "version.list.title"
 
+    /** 右侧面板页签：版本。 */
+    const val PANEL_VERSIONS = "panel.versions"
+
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 
