@@ -63,7 +63,10 @@ object HeadlessMcBootstrap {
                 startupFailure = t
                 state.set(State.FAILED)
                 started.countDown()
-                throw IllegalStateException("headlessmc 容器启动失败", t)
+                // 把根因链写进 message：只用 IllegalStateException 包一层的话，
+                // CI 日志里只剩 "容器启动失败"，看不出到底卡在哪一步
+                // （找不到 Quarkus 类 / bean 冲突 / 配置文件写不进去……）。
+                throw IllegalStateException("headlessmc 容器启动失败: ${describeChain(t)}", t)
             }
             return
         }
@@ -81,10 +84,33 @@ object HeadlessMcBootstrap {
         }
 
         when (val current = state.get()) {
-            State.FAILED -> throw IllegalStateException("headlessmc 容器启动失败", startupFailure)
+            State.FAILED -> throw IllegalStateException(
+                "headlessmc 容器启动失败: ${startupFailure?.let { describeChain(it) }}",
+                startupFailure,
+            )
             State.READY -> Unit
             else -> throw IllegalStateException("headlessmc 容器状态异常: $current")
         }
+    }
+
+    /**
+     * 把异常链压成一行，用于日志和断言信息。
+     *
+     * <p>Quarkus 启动失败往往嵌套三五层（DeploymentException → RuntimeException →
+     * ClassNotFoundException），只看最外层完全无法定位。这里保留每层的类名和 message。
+     */
+    private fun describeChain(t: Throwable): String {
+        val parts = mutableListOf<String>()
+        var cur: Throwable? = t
+        var depth = 0
+        while (cur != null && depth < 6) {
+            val msg = cur.message?.take(200)
+            parts += if (msg.isNullOrBlank()) cur.javaClass.simpleName
+            else "${cur.javaClass.simpleName}: $msg"
+            cur = cur.cause?.takeIf { it !== cur }
+            depth++
+        }
+        return parts.joinToString(" <- ")
     }
 
     /** 容器是否已就绪。 */
