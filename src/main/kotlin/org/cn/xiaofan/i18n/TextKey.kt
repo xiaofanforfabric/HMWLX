@@ -169,6 +169,77 @@ object TextKey {
     /** 取消按钮。 */
     const val ACCOUNT_ADD_OFFLINE_CANCEL = "account.add.offline.cancel"
 
+    // --- 版本列表 ---
+
+    /** 列表标题。`{0}` 为版本数量。 */
+    const val VERSION_LIST_TITLE = "version.list.title"
+
+    /** 刷新按钮的无障碍描述。 */
+    const val VERSION_REFRESH = "version.refresh"
+
+    /** 读取版本列表失败。`{0}` 为原因。 */
+    const val VERSION_SCAN_FAILED = "version.scan.failed"
+
+    /** 一个版本都没装。 */
+    const val VERSION_EMPTY = "version.empty"
+
+    /** 还没选版本时的提示。 */
+    const val VERSION_SELECT_HINT = "version.select.hint"
+
+    /** 启动按钮。 */
+    const val VERSION_LAUNCH = "version.launch"
+
+    /** 版本设置按钮（占位）。 */
+    const val VERSION_SETTINGS = "version.settings"
+
+    /** 打开游戏目录按钮。 */
+    const val VERSION_OPEN_DIR = "version.open.dir"
+
+    /** 父版本缺失时重新扫描。 */
+    const val VERSION_RESCAN = "version.rescan"
+
+    /** 版本类型：正式版。 */
+    const val VERSION_TYPE_RELEASE = "version.type.release"
+
+    /** 版本类型：快照。 */
+    const val VERSION_TYPE_SNAPSHOT = "version.type.snapshot"
+
+    /** 版本类型：远古 Beta。 */
+    const val VERSION_TYPE_OLD_BETA = "version.type.old.beta"
+
+    /** 版本类型：远古 Alpha。 */
+    const val VERSION_TYPE_OLD_ALPHA = "version.type.old.alpha"
+
+    /** 版本类型：未知。 */
+    const val VERSION_TYPE_OTHER = "version.type.other"
+
+    /** 详情：版本类型。 */
+    const val VERSION_DETAIL_TYPE = "version.detail.type"
+
+    /** 详情：加载器（继承的父版本）。 */
+    const val VERSION_DETAIL_LOADER = "version.detail.loader"
+
+    /** 详情：原版（没有父版本）。 */
+    const val VERSION_DETAIL_LOADER_VANILLA = "version.detail.loader.vanilla"
+
+    /** 详情：主类。 */
+    const val VERSION_DETAIL_MAIN_CLASS = "version.detail.main.class"
+
+    /** 详情：发布时间。 */
+    const val VERSION_DETAIL_RELEASE_TIME = "version.detail.release.time"
+
+    /** 详情：游戏目录。 */
+    const val VERSION_DETAIL_GAME_DIR = "version.detail.game.dir"
+
+    /** 详情：字段缺失。 */
+    const val VERSION_DETAIL_UNKNOWN = "version.detail.unknown"
+
+    /** 列表行标记：父版本缺失。 */
+    const val VERSION_MISSING_PARENT = "version.missing.parent"
+
+    /** 详情：父版本缺失的说明。`{0}` 为父版本 id。 */
+    const val VERSION_MISSING_PARENT_HINT = "version.missing.parent.hint"
+
     // --- 用户协议 ---
 
     /** 开屏标题，如「请先阅读用户协议」。 */
