@@ -32,7 +32,10 @@
         - name: run-tests
           script: |
             chmod +x ./gradlew
-            ./gradlew test --no-daemon --stacktrace
+            # --no-build-cache：quarkusGenerateCode 不把 application.properties 当输入，
+            # 改 index-dependency 后缓存键不变，会恢复出旧配置的 bean 索引，
+            # 导致 yggdrasil auth provider 静默不注册。
+            ./gradlew test --no-daemon --no-build-cache --stacktrace
 
         # 仅 release-intent 提交才构建
         - name: build
@@ -40,7 +43,7 @@
             printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qE '^(rel|beta|RC|test):'
           script: |
             chmod +x ./gradlew
-            ./gradlew build --no-daemon --stacktrace
+            ./gradlew build --no-daemon --no-build-cache --stacktrace
 
         - name: show-artifacts
           if: |
@@ -66,4 +69,5 @@
         - name: run-tests
           script: |
             chmod +x ./gradlew
-            ./gradlew test --no-daemon --stacktrace
+            # --no-build-cache 的理由同 push 分支，见上方注释。
+            ./gradlew test --no-daemon --no-build-cache --stacktrace
