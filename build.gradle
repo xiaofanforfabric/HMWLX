@@ -53,10 +53,14 @@ dependencies {
 
     // headlessmc-auth-yggdrasil 的 YggdrasilClientFactory 用
     // RestClientBuilder.newBuilder() 建客户端，这个 API 由 quarkus-rest-client 提供。
-    // 少了它，AuthFactory.createYggdrasilAuthProvider 的参数在构建期解析不到类型，
-    // 该 @Produces 方法会被 ArC **静默跳过**（不打任何日志），于是容器里只有
-    // [default, offline] 两个认证源，YggdrasilAuthProvider 类却在 classpath 上。
+    // JitPack 上的 headlessmc 元数据把 quarkus-rest-client-jackson 标成 runtime，
+    // 主工程的编译 / 索引类路径上看不到 RestClientBuilder。显式声明后它才在。
     // 版本由 headlessmc 的 quarkus-bom 传递进来，不写死。
+    //
+    // 注意：这不是 yggdrasil 认证源缺失的原因。缺这个扩展时 ArC 会静默跳过
+    // createYggdrasilAuthProvider，但那只是候选解释之一；本次真正的原因是
+    // application.properties 里没有 hmc.auth.yggdrasil.url（provider 注册了但
+    // isEnabled() 为 false）。两件事都补上，别再把它们混成一件。
     implementation 'io.quarkus:quarkus-rest-client'
 
     // Compose Desktop UI

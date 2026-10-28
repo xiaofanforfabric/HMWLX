@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test
  * 只锁定：
  * 1. 那个方法确实存在，且参数类型符合预期
  * 2. 外置登录 provider 能从容器里取到
+ * 3. `hmc.auth.yggdrasil.url` 有配置，provider 才是 enabled 的
  *
  * <p>方法一旦被改名或改签名，这里立刻报红，而不是等到用户点登录才失败。
  */
@@ -108,6 +109,30 @@ class YggdrasilLoginContractTest {
     }
 
     /**
+     * `AuthService.getProvider()` 只遍历**已启用**的 provider。
+     *
+     * <p>`YggdrasilAuthProvider.isEnabled()` 只在 `hmc.auth.yggdrasil.url` 非空时
+     * 返回 true。也就是说，光把 provider 注册进容器还不够 —— 少了这条配置，
+     * 容器里明明有 yggdrasil provider，`getProvider(yggdrasil)` 仍然返回空。
+     *
+     * <p>这条断言直指配置本身，失败信息能直接告诉人「配置丢了」，
+     * 不用再从 `[default, offline]` 这种表象往回推。
+     */
+    @Test
+    fun `hmc_auth_yggdrasil_url 有配置`() {
+        val url = org.eclipse.microprofile.config.ConfigProvider.getConfig()
+            .getOptionalValue("hmc.auth.yggdrasil.url", String::class.java)
+            .orElse(null)
+
+        assertTrue(
+            !url.isNullOrBlank() || System.getProperty("hmc.auth.yggdrasil.url") != null,
+            "application.properties 里缺 hmc.auth.yggdrasil.url。" +
+                "YggdrasilAuthProvider.isEnabled() 因此返回 false，" +
+                "AuthService.getProvider(yggdrasil) 一定取不到 —— provider 注册得再对也没用。",
+        )
+    }
+
+    /**
      * 构建期的类路径契约：`AuthFactory.createYggdrasilAuthProvider` 用到的类型都得在。
      *
      * <p>这条比容器里数 provider 更早失败、也更直白。ArC 处理 `@Produces` 方法时，
@@ -180,10 +205,11 @@ class YggdrasilLoginContractTest {
                 appendLine("user.home: ${System.getProperty("user.home")}")
                 appendLine("java.version: ${System.getProperty("java.version")}")
                 append(
-                    "如果 YggdrasilAuthProvider 不在 classpath 上，说明 auth-yggdrasil 没被依赖进去；" +
-                        "如果在但 provider 缺失，多半是 AuthFactory.createYggdrasilAuthProvider 的某个" +
-                        "参数类型解析不到（例如缺 io.quarkus:quarkus-rest-client），" +
-                        "ArC 会把整个 @Produces 方法静默跳过 —— 不打日志、不报错，只能这样反查。",
+                    "排查顺序（按踩坑的成本从低到高）：" +
+                        "1) hmc.auth.yggdrasil.url 没配 —— isEnabled() 返回 false，" +
+                        "AuthService 只认 enabled 的 provider，配置项见 application.properties；" +
+                        "2) @Produces 方法被 ArC 静默跳过（参数类型解析不到）；" +
+                        "3) auth-yggdrasil 根本没被依赖进来。",
                 )
             },
         )
