@@ -29,12 +29,12 @@ class JsonTest {
 
     @Test
     fun `解析转义字符`() {
-        // 期望值里用 \\ 表示「JSON 文本里有一个反斜杠」，这样断言只依赖 JSON 解析结果，
-        // 不再受 Kotlin 自身转义规则影响 —— 少一层心智负担。
-        assertEquals("q\"w", Json.parse("""{"k":"q\\"w"}""").let { Json.stringAt(it, "k") })
-        assertEquals("a\\b", Json.parse("""{"k":"a\\\\b"}""").let { Json.stringAt(it, "k") })
-        assertEquals("行\n尾", Json.parse("""{"k":"行\\n尾"}""").let { Json.stringAt(it, "k") })
-        assertEquals("中", Json.parse("""{"k":"\\u4e2d"}""").let { Json.stringAt(it, "k") })
+        // 原始字符串里不处理反斜杠，所以 JSON 文本、期望值可以原样写，
+        // 不必再叠一层 Kotlin 转义。
+        assertEquals("q\"w", Json.stringAt(Json.parse("""{"k":"q\"w"}"""), "k"))
+        assertEquals("a\\b", Json.stringAt(Json.parse("""{"k":"a\\b"}"""), "k"))
+        assertEquals("行\n尾", Json.stringAt(Json.parse("""{"k":"行\n尾"}"""), "k"))
+        assertEquals("中", Json.stringAt(Json.parse("""{"k":"\u4e2d"}"""), "k"))
     }
 
     @Test
