@@ -51,6 +51,14 @@ dependencies {
     // 保证编译期可见且不与运行期版本冲突。
     compileOnly 'net.raphimc:MinecraftAuth:5.0.2'
 
+    // headlessmc-auth-yggdrasil 的 YggdrasilClientFactory 用
+    // RestClientBuilder.newBuilder() 建客户端，这个 API 由 quarkus-rest-client 提供。
+    // 少了它，AuthFactory.createYggdrasilAuthProvider 的参数在构建期解析不到类型，
+    // 该 @Produces 方法会被 ArC **静默跳过**（不打任何日志），于是容器里只有
+    // [default, offline] 两个认证源，YggdrasilAuthProvider 类却在 classpath 上。
+    // 版本由 headlessmc 的 quarkus-bom 传递进来，不写死。
+    implementation 'io.quarkus:quarkus-rest-client'
+
     // Compose Desktop UI
     implementation compose.desktop.currentOs
     implementation compose.material3

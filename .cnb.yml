@@ -33,8 +33,8 @@
           script: |
             chmod +x ./gradlew
             # --no-build-cache：quarkusGenerateCode 不把 application.properties 当输入，
-            # 改 index-dependency 后缓存键不变，会恢复出旧配置的 bean 索引，
-            # 导致 yggdrasil auth provider 静默不注册。
+            # 改 index-dependency 后缓存键不变，会恢复出旧配置的 bean 索引。
+            # （与 yggdrasil provider 缺失无关，那是缺 quarkus-rest-client 导致的，见 build.gradle）
             ./gradlew test --no-daemon --no-build-cache --stacktrace
 
         # 仅 release-intent 提交才构建

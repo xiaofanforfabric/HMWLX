@@ -108,6 +108,38 @@ class YggdrasilLoginContractTest {
     }
 
     /**
+     * 构建期的类路径契约：`AuthFactory.createYggdrasilAuthProvider` 用到的类型都得在。
+     *
+     * <p>这条比容器里数 provider 更早失败、也更直白。ArC 处理 `@Produces` 方法时，
+     * 只要有一个参数类型解析不到，就把整个方法**静默丢掉**（不打日志、不报错），
+     * 运行期表现就是「provider 莫名没注册」。最容易漏的是
+     * `org.eclipse.microprofile.rest.client.RestClientBuilder`：它由
+     * `io.quarkus:quarkus-rest-client` 提供，JitPack 上的 headlessmc 元数据把它标成
+     * runtime，主工程不显式依赖就根本不在编译类路径上。
+     */
+    @Test
+    fun `yggdrasil provider 工厂依赖的类型都在类路径上`() {
+        val required = listOf(
+            "org.eclipse.microprofile.rest.client.RestClientBuilder",
+            "io.github.headlesshq.headlessmc.auth.yggdrasil.YggdrasilAuthProvider",
+            "io.github.headlesshq.headlessmc.auth.yggdrasil.YggdrasilClientFactory",
+            "io.github.headlesshq.headlessmc.auth.yggdrasil.YggdrasilAccount",
+            "io.github.headlesshq.headlessmc.auth.cdi.AuthFactory",
+        )
+
+        val missing = required.filter {
+            runCatching { Class.forName(it, false, javaClass.classLoader) }.isFailure
+        }
+
+        assertTrue(
+            missing.isEmpty(),
+            "类路径上缺这些类型，AuthFactory.createYggdrasilAuthProvider 会被 ArC 静默跳过：" +
+                missing.joinToString("、") +
+                "。RestClientBuilder 缺失时在 build.gradle 补 implementation 'io.quarkus:quarkus-rest-client'。",
+        )
+    }
+
+    /**
      * 取 yggdrasil 认证源。取不到时把容器里的实际情况一并写进异常信息。
      *
      * <p>只抛一句"容器里没有 yggdrasil 认证源"在 CI 上没法定位问题 ——
@@ -148,9 +180,10 @@ class YggdrasilLoginContractTest {
                 appendLine("user.home: ${System.getProperty("user.home")}")
                 appendLine("java.version: ${System.getProperty("java.version")}")
                 append(
-                    "如果 YggdrasilAuthProvider 不在 classpath 上，" +
-                        "说明 auth-yggdrasil 没被依赖进去；" +
-                        "如果在但 provider 缺失，检查 application.properties 里的 index-dependency。",
+                    "如果 YggdrasilAuthProvider 不在 classpath 上，说明 auth-yggdrasil 没被依赖进去；" +
+                        "如果在但 provider 缺失，多半是 AuthFactory.createYggdrasilAuthProvider 的某个" +
+                        "参数类型解析不到（例如缺 io.quarkus:quarkus-rest-client），" +
+                        "ArC 会把整个 @Produces 方法静默跳过 —— 不打日志、不报错，只能这样反查。",
                 )
             },
         )
