@@ -139,7 +139,14 @@ class YggdrasilLoginContractTest {
                 appendLine("容器状态: ${HeadlessMcBootstrap.currentState()}")
                 appendLine("注册的 provider: ${runCatching { service.providers.map { it.name } }}")
                 appendLine("默认 provider: ${runCatching { service.defaultProvider.name }}")
+                appendLine("provider 数量: ${runCatching { service.providers.size }}")
                 appendLine("YggdrasilAuthProvider 类: $providerClassOnPath")
+                appendLine("YggdrasilClientFactory 类: ${runCatching {
+                    Class.forName("io.github.headlesshq.headlessmc.auth.yggdrasil.YggdrasilClientFactory")
+                        .name
+                }.getOrElse { "<不在 classpath 上: ${it.javaClass.simpleName}>" }}")
+                appendLine("user.home: ${System.getProperty("user.home")}")
+                appendLine("java.version: ${System.getProperty("java.version")}")
                 append(
                     "如果 YggdrasilAuthProvider 不在 classpath 上，" +
                         "说明 auth-yggdrasil 没被依赖进去；" +

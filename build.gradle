@@ -90,6 +90,16 @@ test {
     inputs.file('LEGAL/用户协议.txt')
         .withPropertyName('legalAgreementText')
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // 把测试的标准输出打进构建日志。
+    // Gradle 默认只在 HTML 报告里存 system-out，CI 日志里看不到 ——
+    // 容器启动失败时的诊断信息（异常链、classpath、provider 列表）会全部被吞掉，
+    // 导致远端失败完全无从定位。
+    testLogging {
+        showStandardStreams = true
+        exceptionFormat = 'full'
+        events 'failed', 'skipped'
+    }
 }
 
 // Compose Desktop 运行入口。
