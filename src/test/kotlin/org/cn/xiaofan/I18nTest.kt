@@ -27,7 +27,6 @@ class I18nTest {
             TextKey.APP_NAME,
             TextKey.APP_SUBTITLE,
             TextKey.WINDOW_TITLE,
-            TextKey.READY_ROOT_COMMAND_MISSING,
             TextKey.SOURCE_MICROSOFT,
             TextKey.SOURCE_YGGDRASIL,
             TextKey.SOURCE_OFFLINE,
@@ -45,8 +44,8 @@ class I18nTest {
 
     @Test
     fun `占位符会被替换`() {
-        assertEquals("根命令: hmc", Messages.get(TextKey.READY_ROOT_COMMAND, "hmc"))
-        assertEquals("子命令数: 3", Messages.get(TextKey.READY_SUBCOMMAND_COUNT, 3))
+        assertEquals("已存在名为 Steve 的离线账号", Messages.get(TextKey.ACCOUNT_ADD_OFFLINE_DUPLICATE, "Steve"))
+        assertEquals("切换账号失败：boom", Messages.get(TextKey.ACCOUNT_SWITCH_FAILED, "boom"))
     }
 
     @Test

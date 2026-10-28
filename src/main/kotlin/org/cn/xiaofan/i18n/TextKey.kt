@@ -22,18 +22,6 @@ object TextKey {
     /** 窗口标题。 */
     const val WINDOW_TITLE = "app.window.title"
 
-    /** 读到容器状态。`{0}` 为状态值。 */
-    const val READY_CONTAINER_STATE = "ready.container.state"
-
-    /** 读到根命令名。`{0}` 为命令名。 */
-    const val READY_ROOT_COMMAND = "ready.root.command"
-
-    /** 读到子命令数量。`{0}` 为数量。 */
-    const val READY_SUBCOMMAND_COUNT = "ready.subcommand.count"
-
-    /** 没取到根命令。 */
-    const val READY_ROOT_COMMAND_MISSING = "ready.root.command.missing"
-
     /** 账号来源：正版。 */
     const val SOURCE_MICROSOFT = "account.source.microsoft"
 
@@ -101,6 +89,33 @@ object TextKey {
 
     /** 登录第三方外置登录账号按钮。 */
     const val ACCOUNT_LOGIN_YGGDRASIL = "account.login.yggdrasil"
+
+    /** 外置登录：说明文字。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_DESC = "account.login.yggdrasil.desc"
+
+    /** 外置登录：服务器地址字段。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_SERVER = "account.login.yggdrasil.server"
+
+    /** 外置登录：账号字段。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_USERNAME = "account.login.yggdrasil.username"
+
+    /** 外置登录：密码字段。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_PASSWORD = "account.login.yggdrasil.password"
+
+    /** 外置登录：登录中。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_WAITING = "account.login.yggdrasil.waiting"
+
+    /** 外置登录：确定按钮。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_CONFIRM = "account.login.yggdrasil.confirm"
+
+    /** 外置登录：角色选择标题。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_PROFILE_TITLE = "account.login.yggdrasil.profile.title"
+
+    /** 外置登录：角色选择说明。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_PROFILE_DESC = "account.login.yggdrasil.profile.desc"
+
+    /** 外置登录失败。`{0}` 为原因。 */
+    const val ACCOUNT_LOGIN_YGGDRASIL_FAILED = "account.login.yggdrasil.failed"
 
     // --- 添加离线账号 ---
 

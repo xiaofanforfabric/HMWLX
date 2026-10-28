@@ -86,6 +86,9 @@ fun MicrosoftLoginDialog(
                 onLoggedIn(result.profile)
             }
             is LoginResult.Failed -> error = result.reason
+            // 微软账号只对应一个角色，不会走到这里；真走到说明上游语义变了，
+            // 明确报错而不是静默吞掉
+            is LoginResult.ProfileRequired -> error = "微软登录不应要求选择角色，请反馈此问题"
         }
     }
 

@@ -120,6 +120,13 @@ sealed interface LoginResult {
     /** 登录成功，携带新账号。 */
     data class Success(val profile: AccountProfile) : LoginResult
 
+    /**
+     * 账号有多个角色，需要用户先选一个再继续登录。
+     *
+     * @property profiles 候选角色名，按服务端返回的顺序
+     */
+    data class ProfileRequired(val profiles: List<String>) : LoginResult
+
     /** 失败，`reason` 可直接展示。 */
     data class Failed(val reason: String) : LoginResult
 }
