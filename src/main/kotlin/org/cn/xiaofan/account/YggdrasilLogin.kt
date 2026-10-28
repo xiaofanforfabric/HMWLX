@@ -258,8 +258,8 @@ object YggdrasilLogin {
      * 上游格式（实测 0df01d2043）：
      * ```
      * Found 2 profiles:
-     *   1. xiaofanforMC
-     *   2. xiaofanbot
+     *   1. TestPlayer1
+     *   2. TestPlayer2
      * Select a profile (1-2):
      * ```
      * 注意序号后面是**点号**不是冒号，且行首有缩进。

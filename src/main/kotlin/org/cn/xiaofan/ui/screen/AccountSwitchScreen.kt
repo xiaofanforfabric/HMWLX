@@ -19,13 +19,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -84,6 +90,8 @@ fun AccountSwitchScreen(
     // 切换中：切号要写 headlessmc 的 lastUsedAccount 落盘，期间再点一次列表
     // 会并发写同一个文件，结果是两边都不生效。干脆挡住重复点击。
     var switching by remember { mutableStateOf(false) }
+    // 待确认删除的账号。非空即弹出确认框 —— 删账号是不可逆的，不能点一下就没。
+    var removing by remember { mutableStateOf<AccountProfile?>(null) }
     val scope = rememberCoroutineScope()
 
     /**
@@ -129,6 +137,50 @@ fun AccountSwitchScreen(
         }
     }
 
+    /**
+     * 确认后真正移除账号。
+     *
+     * <p>删的若是当前账号，headlessmc 的 `lastUsedAccount` 就指向了一个不存在的账号，
+     * 之后读 [AccountService.currentAccount] 会退回到列表第一个或默认离线账号。
+     * 那种「悄悄换了人」比直接报错更难排查，所以这里主动切到剩下的第一个账号并通知外层。
+     *
+     * <p>删的不是当前账号时，列表刷新后当前账号不变，不需要惊动主界面。
+     */
+    fun removeAccount(profile: AccountProfile) {
+        if (switching) return
+        switching = true
+        error = null
+        scope.launch {
+            removing = null
+            if (!AccountService.removeAccount(profile)) {
+                error = Messages.get(TextKey.ACCOUNT_REMOVE_FAILED, profile.name)
+                switching = false
+                return@launch
+            }
+
+            val wasCurrent = profile.name == current.name && profile.provider == current.provider
+            groups = AccountService.groupedAccounts()
+
+            if (wasCurrent) {
+                // 优先待在原分组里就近选一个，没有才退到全表第一个。
+                val sameGroup = groups.entries
+                    .firstOrNull { it.key.provider == profile.provider }
+                    ?.value
+                    .orEmpty()
+                val next = sameGroup.firstOrNull()
+                    ?: groups.values.flatten().firstOrNull()
+                if (next != null && AccountService.switchTo(next)) {
+                    onSwitched(next)
+                } else {
+                    // 一个账号都不剩：currentAccount() 会退到默认离线账号，
+                    // 通知外层重新读一次，避免主界面还显示刚删掉的名字。
+                    onSwitched(AccountService.currentAccount())
+                }
+            }
+            switching = false
+        }
+    }
+
     // 与主界面用同一张背景。主界面靠局部卡片保证可读性，
     // 但这里是整屏的列表 + 表单，底下的文字直接压在图上会花 ——
     // 所以保留一层很薄的遮罩（0.28），既压住噪点又不把图冲淡。
@@ -157,6 +209,7 @@ fun AccountSwitchScreen(
                             current = current,
                             enabled = !switching,
                             onSelect = { profile -> switchTo(profile) { onSwitched(profile) } },
+                            onRequestRemove = { profile -> removing = profile },
                         )
                     }
                 }
@@ -235,6 +288,61 @@ fun AccountSwitchScreen(
             onDismiss = { showYggdrasilLogin = false },
         )
     }
+
+    removing?.let { target ->
+        RemoveAccountDialog(
+            profile = target,
+            isCurrent = target.name == current.name && target.provider == current.provider,
+            onConfirm = { removeAccount(target) },
+            onDismiss = { removing = null },
+        )
+    }
+}
+
+/**
+ * 退出登录（移除账号）的确认框。
+ *
+ * <p>删账号不可逆，且对微软/皮肤站账号来说意味着下次要重新走一遍授权流程，
+ * 所以必须二次确认，并把「会丢掉登录信息」讲清楚。
+ */
+@Composable
+private fun RemoveAccountDialog(
+    profile: AccountProfile,
+    isCurrent: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text(TextKey.ACCOUNT_REMOVE_TITLE)) },
+        text = {
+            Column {
+                Text(Messages.get(TextKey.ACCOUNT_REMOVE_BODY, profile.name))
+                if (isCurrent) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        // 当前账号被删会自动换人，用户得先知道，不然会觉得"账号自己变了"
+                        text = text(TextKey.ACCOUNT_REMOVE_CURRENT_HINT),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = text(TextKey.ACCOUNT_REMOVE_CONFIRM),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text(TextKey.ACCOUNT_REMOVE_CANCEL))
+            }
+        },
+    )
 }
 
 @Composable
@@ -261,6 +369,7 @@ private fun AccountList(
     current: AccountProfile,
     enabled: Boolean,
     onSelect: (AccountProfile) -> Unit,
+    onRequestRemove: (AccountProfile) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         AccountService.AccountGroup.entries.forEach { group ->
@@ -286,6 +395,7 @@ private fun AccountList(
                         selected = profile.name == current.name && profile.provider == current.provider,
                         enabled = enabled,
                         onClick = { onSelect(profile) },
+                        onRemove = { onRequestRemove(profile) },
                     )
                 }
             }
@@ -309,6 +419,7 @@ private fun AccountRow(
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer
     else MaterialTheme.colorScheme.surface
@@ -319,7 +430,7 @@ private fun AccountRow(
             .clip(RoundedCornerShape(8.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RowAvatar(profile)
@@ -345,6 +456,22 @@ private fun AccountRow(
                 text = text(TextKey.ACCOUNT_CURRENT),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+
+        // 垃圾桶一直在，不靠 hover 才出现：桌面端用户不会去"探索"行内的隐藏操作，
+        // 而且 Compose 的 hover 检测要额外铺 pointerMoveFilter，收益不值这点代码。
+        IconButton(
+            onClick = onRemove,
+            enabled = enabled,
+            modifier = Modifier.size(32.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = Messages.get(TextKey.ACCOUNT_REMOVE_DESCRIPTION, profile.name),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

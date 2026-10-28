@@ -25,12 +25,12 @@ class OfflineUuidTest {
         // 离线模式 UUID 是 v3（MD5），第 13 位固定为 3。
         assertEquals("b50ad385829d3141a2167e7d7539ba7f", offlineUuid("Notch"))
         assertEquals("5627dd98e6be3c21b8a8e92344183641", offlineUuid("Steve"))
-        assertEquals("d9c9e2a79d863b5bbb7967ab835ee760", offlineUuid("xiaofanbot"))
+        assertEquals("5116c225ff07399689019e809826e635", offlineUuid("TestPlayer1"))
     }
 
     @Test
     fun `UUID 格式合法`() {
-        val uuid = offlineUuid("xiaofanbot")
+        val uuid = offlineUuid("TestPlayer1")
         assertEquals(32, uuid.length, "去掉连字符后应为 32 位")
         assertEquals(uuid.lowercase(), uuid, "应全小写")
         assertEquals('3', uuid[12], "v3 UUID 的第 13 位固定为 3")

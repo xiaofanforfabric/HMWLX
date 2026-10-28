@@ -22,14 +22,14 @@ class YggdrasilProfileSelectionTest {
     private val pattern = Regex("""^\s*(\d+)\.\s+(.+?)\s*$""", RegexOption.MULTILINE)
 
     /**
-     * 实测输出（LittleSkin，账号 cengxudaima@qq.com，2026-10）。
+     * 实测输出（LittleSkin，2026-10）。
      *
      * 注意：序号用点号 `1.`，不是冒号 `1:`；行首有两个空格缩进。
      */
     private val realOutput = """
         Found 2 profiles:
-          1. xiaofanforMC
-          2. xiaofanbot
+          1. TestPlayer1
+          2. TestPlayer2
         Select a profile (1-2):
     """.trimIndent()
 
@@ -38,7 +38,7 @@ class YggdrasilProfileSelectionTest {
         val names = pattern.findAll(realOutput).map { it.groupValues[2].trim() }.toList()
 
         assertEquals(
-            listOf("xiaofanforMC", "xiaofanbot"),
+            listOf("TestPlayer1", "TestPlayer2"),
             names,
             "正则必须匹配「缩进 + 数字 + 点号 + 名字」的实际格式",
         )
@@ -55,7 +55,7 @@ class YggdrasilProfileSelectionTest {
     @Test
     fun `冒号格式不会被匹配`() {
         // 记录这个坑：早期正则写的是冒号，匹配不到实际输出
-        val wrongFormat = "1: xiaofanforMC\n2: xiaofanbot"
+        val wrongFormat = "1: TestPlayer1\n2: TestPlayer2"
 
         assertTrue(
             pattern.findAll(wrongFormat).none(),
@@ -71,7 +71,7 @@ class YggdrasilProfileSelectionTest {
             .map { it.groupValues[1] to it.groupValues[2].trim() }
             .toList()
 
-        assertEquals(listOf("1" to "xiaofanforMC", "2" to "xiaofanbot"), names)
+        assertEquals(listOf("1" to "TestPlayer1", "2" to "TestPlayer2"), names)
 
         names.forEach { (index, name) ->
             assertTrue(
