@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +50,7 @@ import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.ui.component.AppBackground
 
 /**
  * 账号切换界面。
@@ -78,6 +80,7 @@ fun AccountSwitchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showAddOffline by remember { mutableStateOf(false) }
     var showMicrosoftLogin by remember { mutableStateOf(false) }
+    var showYggdrasilLogin by remember { mutableStateOf(false) }
     // 切换中：切号要写 headlessmc 的 lastUsedAccount 落盘，期间再点一次列表
     // 会并发写同一个文件，结果是两边都不生效。干脆挡住重复点击。
     var switching by remember { mutableStateOf(false) }
@@ -126,8 +129,18 @@ fun AccountSwitchScreen(
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    // 与主界面用同一张背景。主界面靠局部卡片保证可读性，
+    // 但这里是整屏的列表 + 表单，底下的文字直接压在图上会花 ——
+    // 所以保留一层很薄的遮罩（0.28），既压住噪点又不把图冲淡。
+    Box(modifier = Modifier.fillMaxSize()) {
+        AppBackground()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.28f)),
+        )
+        Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
+            Column(modifier = Modifier.fillMaxSize()) {
             ScreenHeader(onClose = onClose)
             HorizontalDivider()
 
@@ -178,8 +191,7 @@ fun AccountSwitchScreen(
                     Spacer(Modifier.height(8.dp))
 
                     OutlinedButton(
-                        onClick = { },
-                        enabled = false,
+                        onClick = { showYggdrasilLogin = true },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(text(TextKey.ACCOUNT_LOGIN_YGGDRASIL))
@@ -195,6 +207,7 @@ fun AccountSwitchScreen(
                     }
                 }
             }
+        }
         }
     }
 
@@ -213,6 +226,13 @@ fun AccountSwitchScreen(
             // 这里的 onDismiss 只负责关闭。别顺手塞切号/刷新：它也会在用户点关闭时
             // 触发，那时光是关个窗，不该产生任何副作用。
             onDismiss = { showMicrosoftLogin = false },
+        )
+    }
+
+    if (showYggdrasilLogin) {
+        YggdrasilLoginDialog(
+            onLoggedIn = { loggedIn -> onAccountAdded(loggedIn) { showYggdrasilLogin = false } },
+            onDismiss = { showYggdrasilLogin = false },
         )
     }
 }

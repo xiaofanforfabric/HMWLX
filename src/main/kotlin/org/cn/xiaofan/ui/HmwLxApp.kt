@@ -1,5 +1,6 @@
 package org.cn.xiaofan.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -21,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +35,7 @@ import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
+import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 
 /**
@@ -46,9 +49,8 @@ sealed interface BootState {
      * 容器已就绪。
      *
      * @param account 当前登录账号（含头像来源），未登录时为默认离线账号
-     * @param detail 从 headlessmc 取到的桥接信息，用于验证 CDI 链路
      */
-    data class Ready(val account: AccountProfile, val detail: String) : BootState
+    data class Ready(val account: AccountProfile) : BootState
 
     /** 启动失败。 */
     data class Failed(val message: String, val cause: Throwable?) : BootState
@@ -72,8 +74,17 @@ fun HmwLxApp() {
     }
 
     MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize()) {
+        // 背景图铺满整窗，且**不压全屏遮罩**：
+        // 没有 UI 元素的区域直接露出原图，图片才是背景而不是底色。
+        // 可读性由各块的局部面板解决（AccountBar、内容卡片各自带底色），
+        // 全屏压一层浅色会让整张图糊成一片，等于白放。
+        Box(modifier = Modifier.fillMaxSize()) {
+            AppBackground()
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Transparent,
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
                 when (val current = state) {
                     is BootState.Loading -> ContentArea {
                         LoadingScreen()
@@ -101,13 +112,14 @@ fun HmwLxApp() {
                             // 完整高度测量，总高变成 账号栏 + 整窗高，超出部分被裁掉，
                             // 居中的内容会偏到看不见的位置。
                             ContentArea {
-                                ReadyScreen(current.detail)
+                                // 主界面内容还没做，暂时留空，背景图直接露出来。
                             }
                         }
                     }
                     is BootState.Failed -> ContentArea {
                         FailedScreen(current)
                     }
+                }
                 }
             }
         }
@@ -118,6 +130,9 @@ fun HmwLxApp() {
  * 内容区：占满 [Column] 里的剩余高度，内容居中。
  *
  * 抽出来是因为三个分支都要同一份约束逻辑，避免复制粘贴时再次写错成 `fillMaxSize()`。
+ *
+ * <p>这里**不加底板**：内容直接浮在背景图上，图片才是主体。
+ * 代价是文字必须自带可读性措施（浅色 + 阴影），见 [MainScreen]。
  */
 @Composable
 private fun ColumnScope.ContentArea(content: @Composable () -> Unit) {
@@ -147,36 +162,12 @@ private suspend fun bootstrap(): BootState = withContext(Dispatchers.IO) {
         println("[HMWLX] 当前账号: ${account.name} (${account.sourceLabel()}) uuid=${account.uuid}")
         println("[HMWLX] 头像来源: ${account.avatar ?: "<无>"}")
 
-        val detail = readHeadlessMcInfo()
-        println("[HMWLX] 桥接信息:\n$detail")
-        BootState.Ready(account = account, detail = detail)
+        BootState.Ready(account = account)
     } catch (t: Throwable) {
         println("[HMWLX] 容器启动失败: ${t.message}")
         t.printStackTrace()
         BootState.Failed(t.message ?: t.javaClass.simpleName, t)
     }
-}
-
-/**
- * 从 headlessmc 取点真实信息，证明 CDI bridge 是通的。
- */
-private fun readHeadlessMcInfo(): String {
-    val parts = mutableListOf<String>()
-    parts += Messages.get(TextKey.READY_CONTAINER_STATE, HeadlessMcBootstrap.currentState())
-
-    // CommandLine 是 headlessmc 的核心 bean，能取到就说明 CDI 正常
-    val commandLine = runCatching {
-        HeadlessMcBootstrap.bean(picocli.CommandLine::class.java)
-    }.getOrNull()
-
-    if (commandLine != null) {
-        parts += Messages.get(TextKey.READY_ROOT_COMMAND, commandLine.commandSpec.name())
-        parts += Messages.get(TextKey.READY_SUBCOMMAND_COUNT, commandLine.subcommands.size)
-    } else {
-        parts += Messages.get(TextKey.READY_ROOT_COMMAND_MISSING)
-    }
-
-    return parts.joinToString("\n")
 }
 
 @Composable
@@ -185,26 +176,6 @@ private fun LoadingScreen() {
         CircularProgressIndicator(modifier = Modifier.size(48.dp))
         Spacer(Modifier.height(16.dp))
         Text(text(TextKey.BOOT_LOADING), style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
-@Composable
-private fun ReadyScreen(detail: String) {
-    Column(
-        modifier = Modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = text(TextKey.APP_NAME),
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = text(TextKey.APP_SUBTITLE),
-            style = MaterialTheme.typography.titleSmall
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(text = detail, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
