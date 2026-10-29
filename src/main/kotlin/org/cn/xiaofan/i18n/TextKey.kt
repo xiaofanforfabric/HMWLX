@@ -207,6 +207,9 @@ object TextKey {
     /** 版本类型：快照。 */
     const val VERSION_TYPE_SNAPSHOT = "version.type.snapshot"
 
+    /** 版本类型：愚人节。 */
+    const val VERSION_TYPE_APRIL_FOOLS = "version.type.april.fools"
+
     /** 版本类型：远古 Beta。 */
     const val VERSION_TYPE_OLD_BETA = "version.type.old.beta"
 

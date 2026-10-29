@@ -1,5 +1,6 @@
 package org.cn.xiaofan.ui.screen
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,10 +40,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
@@ -50,6 +56,7 @@ import org.cn.xiaofan.util.DesktopOpener
 import org.cn.xiaofan.version.GameVersion
 import org.cn.xiaofan.version.GameVersionService
 import org.cn.xiaofan.version.VersionType
+import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * 主界面：版本列表 + 版本详情。
@@ -107,7 +114,9 @@ fun VersionListScreen(
     ) {
         Row(modifier = Modifier.fillMaxSize()) {
             // 左：版本列表
-            Column(modifier = Modifier.width(300.dp).fillMaxHeight()) {
+            // 删掉了AI的废话,AI老写这种为什么要改这块地方,而这种废话注释对我和别人阅读没有意义!
+            //这个Modifier.width(xxx.dp)是版本列表宽度,如果你想改宽度可以改这个值.
+            Column(modifier = Modifier.width(200.dp).fillMaxHeight()) {
                 ListHeader(
                     count = versions.size,
                     loading = loading,
@@ -219,7 +228,7 @@ private fun VersionRow(version: GameVersion, selected: Boolean, onClick: () -> U
     val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer
     else MaterialTheme.colorScheme.surface.copy(alpha = 0f)
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
@@ -227,31 +236,93 @@ private fun VersionRow(version: GameVersion, selected: Boolean, onClick: () -> U
             .background(bg)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = version.id,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        VersionLogo(version)
+
+        Spacer(Modifier.width(10.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = typeLabel(version),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                text = version.id,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            if (!version.launchable) {
-                Spacer(Modifier.width(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = text(TextKey.VERSION_MISSING_PARENT),
+                    text = typeLabel(version),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = MaterialTheme.colorScheme.primary,
                 )
+                if (!version.launchable) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = text(TextKey.VERSION_MISSING_PARENT),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
 }
+
+/**
+ * 版本行左侧的图标。
+ *
+ * <p>按版本类型选方块：正式版草方块、快照工作台、远古版基岩、愚人节命令方块。
+ *
+ * <p>愚人节必须**先于** [VersionType.SNAPSHOT] 判断 —— 它们在版本 JSON 里
+ * `type` 写的也是 `snapshot`，靠版本号对照表（[VersionType.isAprilFools]）区分。
+ * 顺序反了就会一律显示成快照图标。
+ *
+ * <p>认不出类型（加载器写的自定义 `type`）时用基岩兜底，
+ * 比误标成「正式版草方块」诚实。
+ *
+ * <p>走 ClassLoader 读 classpath 资源，跟 [AppBackground] 一致 ——
+ * 项目没启用 Compose Resources 代码生成，`painterResource` 用不了。
+ */
+@Composable
+private fun VersionLogo(version: GameVersion) {
+    val resource = when {
+        // 愚人节优先判：它们的 type 也是 snapshot，不先排会被归进快照。
+        version.isAprilFools -> "/images/icon-aprilfools.png"
+        version.type == VersionType.RELEASE -> "/images/icon-release.png"
+        version.type == VersionType.SNAPSHOT -> "/images/icon-snapshot.png"
+        version.type == VersionType.OLD_BETA || version.type == VersionType.OLD_ALPHA ->
+            "/images/icon-old.png"
+        // 加载器写的自定义 type：认不出真实版本类型，用基岩这个中性图标，
+        // 比误标成「正式版草方块」诚实。
+        else -> "/images/icon-old.png"
+    }
+
+    var bitmap by remember(resource) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(resource) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                VersionListScreenLogo.javaClass
+                    .getResourceAsStream(resource)
+                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
+            }.getOrNull()
+        }
+    }
+
+    val image = bitmap ?: return
+
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        // 源图 128~512px 缩到 45dp：必须开高质量过滤，否则纹理糊成噪点。
+        filterQuality = FilterQuality.High,
+        modifier = Modifier.size(45.dp),
+    )
+}
+
+/** 只为拿到 classloader 而存在的锚点。 */
+private object VersionListScreenLogo
 
 @Composable
 private fun VersionDetail(
@@ -358,10 +429,13 @@ private fun DetailLine(labelKey: String, value: String) {
  * 猜成「正式版」会把一个 Forge 版本说成 vanilla，猜成「未知」又等于把信息丢了。
  */
 @Composable
-private fun typeLabel(version: GameVersion): String = when (version.type) {
-    VersionType.RELEASE -> text(TextKey.VERSION_TYPE_RELEASE)
-    VersionType.SNAPSHOT -> text(TextKey.VERSION_TYPE_SNAPSHOT)
-    VersionType.OLD_BETA -> text(TextKey.VERSION_TYPE_OLD_BETA)
-    VersionType.OLD_ALPHA -> text(TextKey.VERSION_TYPE_OLD_ALPHA)
-    VersionType.OTHER -> version.rawType ?: text(TextKey.VERSION_TYPE_OTHER)
+private fun typeLabel(version: GameVersion): String = when {
+    // 愚人节优先判：它们 JSON 里的 type 也是 snapshot，
+    // 不先排就会显示成「快照」，用户看不出这是特殊版本。
+    version.isAprilFools -> text(TextKey.VERSION_TYPE_APRIL_FOOLS)
+    version.type == VersionType.RELEASE -> text(TextKey.VERSION_TYPE_RELEASE)
+    version.type == VersionType.SNAPSHOT -> text(TextKey.VERSION_TYPE_SNAPSHOT)
+    version.type == VersionType.OLD_BETA -> text(TextKey.VERSION_TYPE_OLD_BETA)
+    version.type == VersionType.OLD_ALPHA -> text(TextKey.VERSION_TYPE_OLD_ALPHA)
+    else -> version.rawType ?: text(TextKey.VERSION_TYPE_OTHER)
 }
