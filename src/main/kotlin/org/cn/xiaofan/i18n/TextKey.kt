@@ -192,6 +192,53 @@ object TextKey {
     /** 版本抽屉标题。 */
     const val HOME_VERSION_DRAWER = "home.version.drawer"
 
+    // ---- 启动前的账号预检 ----
+    //
+    // 网络类文案只在**微软账号**上出现：只有它的 token 需要找微软续期。
+    // 离线账号没有 token，皮肤站走自己的服务器，微软连不上跟它们无关。
+
+    /** 网络问题导致令牌无法刷新的标题。 */
+    const val AUTH_NETWORK_FAILED_TITLE = "auth.network.failed.title"
+
+    /** 网络问题正文。`{0}` 为账号名。 */
+    const val AUTH_NETWORK_FAILED_BODY = "auth.network.failed.body"
+
+    /** 网络问题的补充说明：后果是什么、可以怎么办。 */
+    const val AUTH_NETWORK_FAILED_HINT = "auth.network.failed.hint"
+
+    /** 网络类失败时仍然启动。 */
+    const val AUTH_NETWORK_LAUNCH_ANYWAY = "auth.network.launch.anyway"
+
+    /** 网络类失败时取消。 */
+    const val AUTH_NETWORK_CANCEL = "auth.network.cancel"
+
+    /** 429 限流正文（知道等待时长）。`{0}` 为账号名，`{1}` 为等待描述。 */
+    const val AUTH_RATE_LIMITED_BODY = "auth.rate.limited.body"
+
+    /** 429 限流正文（不知道等待时长）。`{0}` 为账号名。 */
+    const val AUTH_RATE_LIMITED_BODY_NO_DELAY = "auth.rate.limited.body.no.delay"
+
+    /** 凭据失效对话框标题。`{0}` 为账号名。 */
+    const val AUTH_CREDENTIAL_INVALID_TITLE = "auth.credential.invalid.title"
+
+    /** 凭据失效时的提示：重试没用，要重新登录。 */
+    const val AUTH_CREDENTIAL_INVALID_HINT = "auth.credential.invalid.hint"
+
+    /** 凭据失效时的按钮：去重新登录。 */
+    const val AUTH_CREDENTIAL_RELOGIN = "auth.credential.relogin"
+
+    /** 没有可用账号，需要先登录。 */
+    const val AUTH_NO_ACCOUNT = "auth.no.account"
+
+    /** 认证源不可用对话框标题。`{0}` 为 provider 名。 */
+    const val AUTH_PROVIDER_UNAVAILABLE_TITLE = "auth.provider.unavailable.title"
+
+    /** 未归类错误的对话框标题。 */
+    const val AUTH_UNEXPECTED_TITLE = "auth.unexpected.title"
+
+    /** 通用的关闭按钮。 */
+    const val AUTH_DISMISS = "auth.dismiss"
+
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 
