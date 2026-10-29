@@ -2,6 +2,7 @@ package org.cn.xiaofan.account
 
 import io.github.headlesshq.headlessmc.auth.AuthProvider
 import io.github.headlesshq.headlessmc.auth.AuthService
+import io.github.headlesshq.headlessmc.auth.LastUsedAccountService
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
@@ -138,17 +139,41 @@ object AccountResolver {
     /**
      * 取当前账号。
      *
-     * headlessmc 的 `AuthService.getAccounts()` 返回已保存的账号列表。
-     * 若列表为空，说明用户还没登录过，此时回退到默认离线账号（Steve），
-     * 与 headlessmc 自己的行为一致。
+     * <p>**必须优先读 [LastUsedAccountService]**，这是 headlessmc `account select`
+     * 和本工程 `AccountService.switchTo` 共同写入的位置 —— 界面顶部显示的账号、
+     * 启动时实际使用的账号，都必须是这一条。
+     *
+     * <p>早期版本这里写的是 `AuthService.accounts.firstOrNull()`，那是个 bug：
+     * `accounts` 是按名字排序的**全部**账号列表，取第一个等于「名字字典序最小的那个」，
+     * 跟用户选了谁毫无关系。表现是用户切到离线账号，界面还显示微软账号，
+     * 或者反过来 —— 启动前的账号预检去刷新了一个用户根本没选的账号。
+     *
+     * <p>回退顺序：
+     * 1. [LastUsedAccountService] 的当前账号 —— 正常路径
+     * 2. 账号列表的第一个 —— headlessmc 还没写过 lastUsed 时兜底
+     * 3. 默认离线账号（Steve）—— 一个账号都没有时，与 headlessmc 行为一致
      */
     fun current(): AccountProfile {
-        val account = runCatching {
-            val service = HeadlessMcBootstrap.bean(AuthService::class.java)
-            service.accounts.firstOrNull()
+        // 1. 优先读「上次选中的账号」。
+        runCatching {
+            HeadlessMcBootstrap.bean(LastUsedAccountService::class.java)
+                .lastUsedAccount
+                .orElse(null)
+        }.getOrNull()?.let { account ->
+            return fromAccount(
+                name = account.name,
+                provider = account.provider,
+                uuid = account.uuid,
+            )
+        }
+
+        // 2. 兜底：列表第一个。
+        val fallback = runCatching {
+            HeadlessMcBootstrap.bean(AuthService::class.java).accounts.firstOrNull()
         }.getOrNull()
 
-        if (account == null) {
+        if (fallback == null) {
+            // 3. 一个都没有：默认离线账号。
             return AccountProfile(
                 name = "Offline",
                 provider = AuthProvider.OFFLINE,
@@ -158,9 +183,9 @@ object AccountResolver {
         }
 
         return fromAccount(
-            name = account.name,
-            provider = account.provider,
-            uuid = account.uuid,
+            name = fallback.name,
+            provider = fallback.provider,
+            uuid = fallback.uuid,
         )
     }
 

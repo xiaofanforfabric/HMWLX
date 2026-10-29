@@ -39,12 +39,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountResolver
+import org.cn.xiaofan.account.AuthPreflight
+import org.cn.xiaofan.account.blocksLaunch
+import org.cn.xiaofan.account.shouldWarn
 import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
+import org.cn.xiaofan.ui.component.AuthFailureDialog
 import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
 import org.cn.xiaofan.ui.component.LaunchOverlay
 import org.cn.xiaofan.ui.component.VersionDrawer
@@ -103,6 +107,27 @@ fun HmwLxApp() {
 
     // 版本抽屉是否展开。
     var showVersionDrawer by remember { mutableStateOf(false) }
+
+    // 启动前的账号预检结果。非 null 时弹提示框。
+    var authFailure by remember { mutableStateOf<AuthPreflight.Result?>(null) }
+
+    // 真正开始启动。提到这一层是因为它有两个调用方：按钮的点击回调
+    // 和提示框里的「仍然启动」—— 后者挂在最外层，拿不到内层局部变量。
+    //
+    // account 可空：网络失败时拿不到「刷新过的」账号，
+    // 只能用存储里的旧账号（由 headlessmc 自己读取）。
+    val proceed: (io.github.headlesshq.headlessmc.auth.Account?) -> Unit = { account ->
+        // TODO(human): 启动链路。
+        // account 是刷新过的（或旧的，网络失败时），接下来：
+        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
+        //      inheritsFrom 链展开成完整启动参数
+        //   2. 起子进程并把 stdout 接到界面上的日志面板
+        println(
+            "[HMWLX] 开始启动: 账号=${account?.name ?: "（未刷新）"}, " +
+                "版本=${versions.selected?.id ?: "（未选）"}"
+        )
+        launchScope.launch { launchAnim.play() }
+    }
 
     LaunchedEffect(Unit) {
         state = bootstrap()
@@ -192,22 +217,44 @@ fun HmwLxApp() {
                                             state = launchAnim,
                                             currentVersion = versions.selected,
                                             onClick = {
-                                                // TODO(human): 启动链路。
-                                                // 现在只打日志，确认点击通路是通的。
-                                                // 需要的信息都在手边：
-                                                //   - 当前账号: AccountService.currentAccount()
-                                                //   - 选中版本: versions.selected
-                                                // 分三步实现，各自独立：
-                                                //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-                                                //      inheritsFrom 链展开成完整启动参数
-                                                //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
-                                                //      并生成 --uuid / --accessToken / --userType
-                                                //   3. 起子进程并把 stdout 接到界面上的日志面板
-                                                println(
-                                                    "[HMWLX] 启动按钮被点击，版本=" +
-                                                        "${versions.selected?.id ?: "（未选）"}"
-                                                )
-                                                launchScope.launch { launchAnim.play() }
+                                                // 启动前先查账号，接住 refresh() 的异常。
+                                                //
+                                                // 提示规则分两层：
+                                                // 1. 账号本身有问题（凭据失效 / 无账号 / 认证源不可用）
+                                                //    → 阻止启动并弹窗。这类问题不处理就没法玩。
+                                                // 2. 网络类问题（网络不通 / 429 限流）
+                                                //    → **只有微软账号才提示**。微软账号的 token
+                                                //      有期限、需要定期续期，续不上是真的可能过期了；
+                                                //      离线账号没有 token，皮肤站走自己的服务器，
+                                                //      微软连不上跟它们无关，弹窗纯属干扰。
+                                                //    微软账号提示时仍然放行 —— 用户可以自己决定。
+                                                launchScope.launch {
+                                                    val check = AuthPreflight.check()
+                                                    when {
+                                                        check is AuthPreflight.Result.Ready ->
+                                                            proceed(check.account)
+
+                                                        check.blocksLaunch -> {
+                                                            // 账号类问题：拦住。
+                                                            authFailure = check
+                                                        }
+
+                                                        check.shouldWarn -> {
+                                                            // 微软账号的网络类问题：提示，但不拦。
+                                                            // 弹窗里给「仍然启动」和「取消」。
+                                                            authFailure = check
+                                                        }
+
+                                                        else -> {
+                                                            // 其它账号的网络类问题：静默放行。
+                                                            println(
+                                                                "[HMWLX] 网络问题未影响当前账号类型，" +
+                                                                    "直接启动: ${check.javaClass.simpleName}"
+                                                            )
+                                                            proceed(null)
+                                                        }
+                                                    }
+                                                }
                                             },
                                             onOpenVersions = { showVersionDrawer = true },
                                         )
@@ -256,6 +303,25 @@ fun HmwLxApp() {
             // 这样火箭能飞出主区域内边距、飞出侧栏，一路升到窗口顶边之外。
             // 放在内层任何一个节点里都会被祖先的布局边界裁掉。
             LaunchOverlay(state = launchAnim)
+
+            // 账号预检失败的提示。同样挂在最外层，理由和火箭一样：
+            // 对话框要压在包括侧栏和账号栏在内的所有内容之上。
+            AuthFailureDialog(
+                result = authFailure,
+                onLaunchAnyway = {
+                    // 微软账号的网络类失败：用户选择继续。
+                    // token 可能已过期，但单人游戏不需要它，值得让用户赌一把。
+                    println("[HMWLX] 令牌未刷新，用户选择继续启动")
+                    val current = authFailure
+                    authFailure = null
+                    proceed((current as? AuthPreflight.Result.NetworkFailure)?.account)
+                },
+                onRelogin = {
+                    authFailure = null
+                    showAccountSwitch = true
+                },
+                onDismiss = { authFailure = null },
+            )
         }
     }
 }
