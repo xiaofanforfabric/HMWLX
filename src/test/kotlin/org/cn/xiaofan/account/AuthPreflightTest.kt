@@ -210,13 +210,36 @@ class AuthPreflightTest {
      * <p>反射是因为 `classify` 不该公开：它是 `check()` 的内部实现，
      * 对外只暴露 `check()`。而 `check()` 需要真容器和真网络，测不了。
      * 与其为了测试把私有方法改成 public，不如在这一处用反射。
+     *
+     * <p>**实例必须用 [instance] 拿，不能写成 `AuthPreflight.INSTANCE`**：
+     * `INSTANCE` 是 Kotlin 为 object 生成的合成字段，能出现在字节码里，
+     * 但源码层面解析不到 —— 写了就是 `Unresolved reference 'INSTANCE'`，
+     * 整个 `:compileTestKotlin` 直接挂掉（不是运行时问题，是编译期）。
      */
     private fun classify(e: Throwable): AuthPreflight.Result {
         val method = AuthPreflight::class.java
             .getDeclaredMethod("classify", Account::class.java, Throwable::class.java)
         method.isAccessible = true
-        return method.invoke(AuthPreflight, msaAccount, e) as AuthPreflight.Result
+        return method.invoke(instance, msaAccount, e) as AuthPreflight.Result
     }
+
+    /**
+     * [AuthPreflight] 的单例实例，同样是反射拿的。
+     *
+     * 为什么不用别的写法：
+     * - `AuthPreflight.INSTANCE`：源码层面不存在这个符号，编译不过
+     * - `AuthPreflight.javaClass`：拿到的是 `Class<AuthPreflight>`，
+     *   要的是实例；`javaClass` 还是实例上的扩展属性，绕一圈仍旧需要实例
+     * - `TypeLiteral<AuthPreflight>() {}.getType()`：TypeLiteral 是 CDI 的
+     *   泛型擦除工具，对普通 Kotlin object 毫无意义，运行时拿到的是
+     *   `AuthPreflight` 这个 Class，不是实例
+     *
+     * 只剩静态字段这一条路，而字段名是 Kotlin 的公开约定（`INSTANCE`），
+     * 和 `object Foo` 一一对应，不会随版本漂移。
+     */
+    private val instance: AuthPreflight = AuthPreflight::class.java
+        .getField("INSTANCE")
+        .get(null) as AuthPreflight
 
     // ---------------------------------------------------------------------
     // shouldWarn / blocksLaunch：按账号类型分流
