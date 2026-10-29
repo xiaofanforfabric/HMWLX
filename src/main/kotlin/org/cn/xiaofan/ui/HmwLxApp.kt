@@ -3,6 +3,7 @@ package org.cn.xiaofan.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,7 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -162,19 +166,32 @@ fun HmwLxApp() {
                                 // 就绪后主区域交给当前页。首页时这里是空的，
                                 // 背景图直接露出来 —— 那正是首页该有的样子。
                                 is BootState.Ready -> when (panel) {
-                                    MainPanel.HOME -> Unit
+                                    // 首页：只放一个左下角的启动按钮。
+                                    // 不加背景板：背景图是这张界面的主体，
+                                    // 按钮靠自身的大尺寸和阴影从图上立起来就够了。
+                                    MainPanel.HOME -> Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.BottomStart,
+                                    ) {
+                                        LaunchButton(
+                                            onClick = {
+                                                // TODO(human): 启动链路。
+                                                // 现在只打日志，确认点击通路是通的。
+                                                // 需要的信息都在手边：
+                                                //   - 当前账号: AccountService.currentAccount()
+                                                //   - 选中版本: 由侧栏子菜单维护（selectedVersion）
+                                                // 分三步实现，各自独立：
+                                                //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
+                                                //      inheritsFrom 链展开成完整启动参数
+                                                //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
+                                                //      并生成 --uuid / --accessToken / --userType
+                                                //   3. 起子进程并把 stdout 接到界面上的日志面板
+                                                println("[HMWLX] 启动按钮被点击（启动链路尚未实现）")
+                                            },
+                                        )
+                                    }
 
                                     MainPanel.VERSIONS -> VersionListScreen(onLaunch = { version ->
-                                        // TODO(human): 启动链路。
-                                        // 现在只把选中版本落进日志，确认参数传对了；
-                                        // 真正的实现分三步，各自独立：
-                                        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-                                        //      inheritsFrom 链展开成完整启动参数
-                                        //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
-                                        //      并用当前账号（AccountService.currentAccount）生成
-                                        //      --uuid / --accessToken / --userType
-                                        //   3. 起子进程并把 stdout 接到界面上的日志面板
-                                        // 三步都能单独测：1 和 2 是纯函数，只有 3 需要真起进程。
                                         println(
                                             "[HMWLX] 请求启动版本 ${version.id} " +
                                                 "(类型=${version.type}, 父版本=${version.inheritsFrom})"
@@ -291,6 +308,48 @@ private fun SideMenu(
                 }
             }
         }
+    }
+}
+
+/**
+ * 首页左下角的启动按钮。
+ *
+ * <p>做得比普通按钮大得多（宽 260dp、高 72dp）：它是这张界面唯一的主操作，
+ * 尺寸本身就是"点这个"的提示。小按钮压在背景图上会被照片吃掉。
+ *
+ * <p>白底黑字：背景是亮调海景，白底靠明度对比从图上立出来；
+ * 黑字在白底上对比度最高，也不跟背景的冷色相抢。
+ * 留一点透明度（0.92）让背景能透出极淡的一层，不至于像贴了张纸。
+ */
+@Composable
+private fun LaunchButton(onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .width(260.dp)
+            .height(72.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White.copy(alpha = 0.92f),
+            contentColor = Color.Black,
+        ),
+        contentPadding = PaddingValues(horizontal = 28.dp),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 6.dp,
+            pressedElevation = 2.dp,
+        ),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.PlayArrow,
+            contentDescription = null,
+            modifier = Modifier.size(30.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = text(TextKey.HOME_LAUNCH),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

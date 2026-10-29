@@ -177,6 +177,9 @@ object TextKey {
     /** 右侧面板页签：版本。 */
     const val PANEL_VERSIONS = "panel.versions"
 
+    /** 首页左下角的启动按钮。 */
+    const val HOME_LAUNCH = "home.launch"
+
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 
