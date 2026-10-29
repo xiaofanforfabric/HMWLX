@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountResolver
@@ -43,8 +45,13 @@ import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
+import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
+import org.cn.xiaofan.ui.component.LaunchOverlay
+import org.cn.xiaofan.ui.component.VersionDrawer
+import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
+import org.cn.xiaofan.version.rememberVersionState
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -84,6 +91,18 @@ fun HmwLxApp() {
     var showAccountSwitch by remember { mutableStateOf(false) }
     // 右侧面板当前所在的页。默认是首页，点入口才进具体功能。
     var panel by remember { mutableStateOf(MainPanel.HOME) }
+    // 启动按钮的动画状态。提到这一层是因为火箭要飞到窗口顶部之外，
+    // 覆盖层必须画在最外层 Box 里，而按钮在很深的内层 ——
+    // 两处只能靠这个共享状态通信。
+    val launchAnim = rememberLaunchAnimationState()
+    val launchScope = rememberCoroutineScope()
+
+    // 版本状态提到这一层：首页的启动按钮要显示当前版本，
+    // 版本页要展示全部。两处共用一份，才能保证在一处改了选择另一处立刻知道。
+    val versions = rememberVersionState()
+
+    // 版本抽屉是否展开。
+    var showVersionDrawer by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         state = bootstrap()
@@ -162,24 +181,62 @@ fun HmwLxApp() {
                                 // 就绪后主区域交给当前页。首页时这里是空的，
                                 // 背景图直接露出来 —— 那正是首页该有的样子。
                                 is BootState.Ready -> when (panel) {
-                                    MainPanel.HOME -> Unit
-
-                                    MainPanel.VERSIONS -> VersionListScreen(onLaunch = { version ->
-                                        // TODO(human): 启动链路。
-                                        // 现在只把选中版本落进日志，确认参数传对了；
-                                        // 真正的实现分三步，各自独立：
-                                        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-                                        //      inheritsFrom 链展开成完整启动参数
-                                        //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
-                                        //      并用当前账号（AccountService.currentAccount）生成
-                                        //      --uuid / --accessToken / --userType
-                                        //   3. 起子进程并把 stdout 接到界面上的日志面板
-                                        // 三步都能单独测：1 和 2 是纯函数，只有 3 需要真起进程。
-                                        println(
-                                            "[HMWLX] 请求启动版本 ${version.id} " +
-                                                "(类型=${version.type}, 父版本=${version.inheritsFrom})"
+                                    // 首页：只放一个左下角的启动按钮。
+                                    // 不加背景板：背景图是这张界面的主体，
+                                    // 按钮靠自身的大尺寸和阴影从图上立起来就够了。
+                                    MainPanel.HOME -> Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.BottomStart,
+                                    ) {
+                                        LaunchButtonWithVersion(
+                                            state = launchAnim,
+                                            currentVersion = versions.selected,
+                                            onClick = {
+                                                // TODO(human): 启动链路。
+                                                // 现在只打日志，确认点击通路是通的。
+                                                // 需要的信息都在手边：
+                                                //   - 当前账号: AccountService.currentAccount()
+                                                //   - 选中版本: versions.selected
+                                                // 分三步实现，各自独立：
+                                                //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
+                                                //      inheritsFrom 链展开成完整启动参数
+                                                //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
+                                                //      并生成 --uuid / --accessToken / --userType
+                                                //   3. 起子进程并把 stdout 接到界面上的日志面板
+                                                println(
+                                                    "[HMWLX] 启动按钮被点击，版本=" +
+                                                        "${versions.selected?.id ?: "（未选）"}"
+                                                )
+                                                launchScope.launch { launchAnim.play() }
+                                            },
+                                            onOpenVersions = { showVersionDrawer = true },
                                         )
-                                    })
+
+                                        // 版本抽屉：贴在按钮正上方弹出。
+                                        // 只在打开时进组合树，关掉就整个卸掉，
+                                        // 免得一个看不见的 Popup 还在监听点击。
+                                        if (showVersionDrawer) {
+                                            VersionDrawer(
+                                                versions = versions.versions,
+                                                selected = versions.selected,
+                                                onSelect = { version ->
+                                                    versions.select(version)
+                                                    showVersionDrawer = false
+                                                },
+                                                onDismiss = { showVersionDrawer = false },
+                                            )
+                                        }
+                                    }
+
+                                    MainPanel.VERSIONS -> VersionListScreen(
+                                        state = versions,
+                                        onLaunch = { version ->
+                                            println(
+                                                "[HMWLX] 请求启动版本 ${version.id} " +
+                                                    "(类型=${version.type}, 父版本=${version.inheritsFrom})"
+                                            )
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -194,6 +251,11 @@ fun HmwLxApp() {
                     }
                 }
             }
+
+            // 启动动画的覆盖层：必须在最外层 Box 的最后，
+            // 这样火箭能飞出主区域内边距、飞出侧栏，一路升到窗口顶边之外。
+            // 放在内层任何一个节点里都会被祖先的布局边界裁掉。
+            LaunchOverlay(state = launchAnim)
         }
     }
 }

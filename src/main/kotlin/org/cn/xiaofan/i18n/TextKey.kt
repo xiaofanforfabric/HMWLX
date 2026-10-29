@@ -177,6 +177,21 @@ object TextKey {
     /** 右侧面板页签：版本。 */
     const val PANEL_VERSIONS = "panel.versions"
 
+    /** 首页左下角的启动按钮。 */
+    const val HOME_LAUNCH = "home.launch"
+
+    /** 启动按钮右侧抽屉的无障碍描述。 */
+    const val HOME_PICK_VERSION = "home.pick.version"
+
+    /** 启动按钮下方：还没选出版本。 */
+    const val HOME_NO_VERSION = "home.no.version"
+
+    /** 启动按钮下方：选中版本的父版本缺失，不能启动。`{0}` 为版本 id。 */
+    const val HOME_VERSION_MISSING_PARENT = "home.version.missing.parent"
+
+    /** 版本抽屉标题。 */
+    const val HOME_VERSION_DRAWER = "home.version.drawer"
+
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 

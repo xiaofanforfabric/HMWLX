@@ -54,7 +54,7 @@ import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.util.DesktopOpener
 import org.cn.xiaofan.version.GameVersion
-import org.cn.xiaofan.version.GameVersionService
+import org.cn.xiaofan.version.VersionState
 import org.cn.xiaofan.version.VersionType
 import org.jetbrains.skia.Image as SkiaImage
 
@@ -73,39 +73,14 @@ import org.jetbrains.skia.Image as SkiaImage
  */
 @Composable
 fun VersionListScreen(
+    state: VersionState,
     onLaunch: (GameVersion) -> Unit = {},
 ) {
-    var selected by remember { mutableStateOf<GameVersion?>(null) }
-    var versions by remember { mutableStateOf<List<GameVersion>>(emptyList()) }
-    var gameDirPath by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    // 每次要重扫 +1，LaunchedEffect 以它为 key。刷新按钮与「选了不可启动版本时
-    // 顺手重扫一次」共用这条路径，避免两处各写一套加载逻辑。
-    var reloadToken by remember { mutableStateOf(0) }
+    val versions = state.versions
+    val selected = state.selected
+    val loading = state.loading
+    val error = state.error
     val scope = rememberCoroutineScope()
-
-    LaunchedEffect(reloadToken) {
-        loading = true
-        error = null
-        when (val result = GameVersionService.scan()) {
-            is GameVersionService.VersionScanResult.Success -> {
-                versions = result.versions
-                gameDirPath = result.gameDir.absolutePath
-                // 选中的版本被删掉（或第一次进来）时，落到列表第一个。
-                // 不这么做的后果是右边一直显示一个已经不存在的版本。
-                if (selected == null || versions.none { it.id == selected?.id }) {
-                    selected = versions.firstOrNull()
-                }
-            }
-            is GameVersionService.VersionScanResult.Failed -> {
-                versions = emptyList()
-                selected = null
-                error = result.reason
-            }
-        }
-        loading = false
-    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -120,7 +95,7 @@ fun VersionListScreen(
                 ListHeader(
                     count = versions.size,
                     loading = loading,
-                    onRefresh = { if (!loading) reloadToken++ },
+                    onRefresh = { state.reload() },
                 )
                 HorizontalDivider()
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -143,7 +118,7 @@ fun VersionListScreen(
                         else -> VersionList(
                             versions = versions,
                             selected = selected,
-                            onSelect = { selected = it },
+                            onSelect = { state.select(it) },
                         )
                     }
                 }
@@ -164,19 +139,21 @@ fun VersionListScreen(
                 } else {
                     VersionDetail(
                         version = current,
-                        gameDirPath = gameDirPath,
+                        gameDirPath = state.gameDirPath,
                         onLaunch = {
                             // 启动链路还没接：先把选中版本交出去，调用方决定怎么提示。
                             // 这里不自己弹「敬请期待」——那是界面该说的话，不是列表该说的话。
                             onLaunch(current)
                         },
-                        onRescan = { if (!loading) reloadToken++ },
+                        onRescan = { state.reload() },
                         onOpenGameDir = {
                             // 打不开目录（目录被删 / 没有文件管理器）只是不响应，不弹错误框：
                             // 用户点这个按钮的目的就是「自己去看看」，弹窗反而挡住他。
                             // 丢到 IO 线程：Desktop.open 会同步调起文件管理器，某些桌面环境下
                             // 这一步能卡几百毫秒。
-                            gameDirPath?.let { path -> scope.launch { DesktopOpener.open(path) } }
+                            state.gameDirPath?.let { path ->
+                                scope.launch { DesktopOpener.open(path) }
+                            }
                         },
                     )
                 }
