@@ -272,12 +272,14 @@ private fun VersionRow(version: GameVersion, selected: Boolean, onClick: () -> U
 /**
  * 版本行左侧的图标。
  *
- * <p>按 [VersionType] 选方块，和 HMCL 的分类一致：
- * 正式版草方块、快照工作台、远古版基岩。
+ * <p>按版本类型选方块：正式版草方块、快照工作台、远古版基岩、愚人节命令方块。
  *
- * <p>这里没有用命令方块做「愚人节版本」：Mojang 的版本 JSON 里没有愚人节标记，
- * 只能靠版本号硬编码一张表（23w13a_or_b 这类），维护成本高且容易漏。
- * 所以 [VersionType.OTHER] 走命令方块、愚人节版本暂时和快照同图标。
+ * <p>愚人节必须**先于** [VersionType.SNAPSHOT] 判断 —— 它们在版本 JSON 里
+ * `type` 写的也是 `snapshot`，靠版本号对照表（[VersionType.isAprilFools]）区分。
+ * 顺序反了就会一律显示成快照图标。
+ *
+ * <p>认不出类型（加载器写的自定义 `type`）时用基岩兜底，
+ * 比误标成「正式版草方块」诚实。
  *
  * <p>走 ClassLoader 读 classpath 资源，跟 [AppBackground] 一致 ——
  * 项目没启用 Compose Resources 代码生成，`painterResource` 用不了。
@@ -313,7 +315,7 @@ private fun VersionLogo(version: GameVersion) {
     Image(
         bitmap = image,
         contentDescription = null,
-        // 源图 128~512px 缩到 40dp：必须开高质量过滤，否则纹理糊成噪点。
+        // 源图 128~512px 缩到 45dp：必须开高质量过滤，否则纹理糊成噪点。
         filterQuality = FilterQuality.High,
         modifier = Modifier.size(45.dp),
     )
