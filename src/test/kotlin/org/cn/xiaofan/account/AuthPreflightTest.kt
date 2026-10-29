@@ -211,35 +211,25 @@ class AuthPreflightTest {
      * 对外只暴露 `check()`。而 `check()` 需要真容器和真网络，测不了。
      * 与其为了测试把私有方法改成 public，不如在这一处用反射。
      *
-     * <p>**实例必须用 [instance] 拿，不能写成 `AuthPreflight.INSTANCE`**：
-     * `INSTANCE` 是 Kotlin 为 object 生成的合成字段，能出现在字节码里，
-     * 但源码层面解析不到 —— 写了就是 `Unresolved reference 'INSTANCE'`，
-     * 整个 `:compileTestKotlin` 直接挂掉（不是运行时问题，是编译期）。
+     * <p>第一个参数写 `AuthPreflight` 是**合法**的，不必绕成反射取 `INSTANCE`：
+     * 它是 Kotlin 的 `object`，在**表达式位置**（比如这里的实参）使用时，
+     * 编译器会自动解析成 `AuthPreflight.INSTANCE`。只有显式写成
+     * `AuthPreflight.INSTANCE` 才会报 `Unresolved reference` ——
+     * 因为 `INSTANCE` 是编译器生成的合成字段，源码层面没有这个符号。
+     *
+     * <p>换句话说：`Foo` 能当值用，`Foo.INSTANCE` 不能写。别再为前者加一层反射。
+     * 
+     * 参考KT官方文档https://kotlinlang.org/docs/object-declarations.html#data-objects
+     * 中的:To refer to the object, use its name directly:DataProviderManager.registerDataProvider(exampleProvider)
+     * 直接引用对象名即可，编译器会自动解析成单例实例。根本不需要去反射取INSTANCE字段。
+     * 而且直接写INSTANCE会报错Unresolved reference: INSTANCE,因为KT语言根本不允许你这么写!
      */
     private fun classify(e: Throwable): AuthPreflight.Result {
         val method = AuthPreflight::class.java
             .getDeclaredMethod("classify", Account::class.java, Throwable::class.java)
         method.isAccessible = true
-        return method.invoke(instance, msaAccount, e) as AuthPreflight.Result
+        return method.invoke(AuthPreflight, msaAccount, e) as AuthPreflight.Result
     }
-
-    /**
-     * [AuthPreflight] 的单例实例，同样是反射拿的。
-     *
-     * 为什么不用别的写法：
-     * - `AuthPreflight.INSTANCE`：源码层面不存在这个符号，编译不过
-     * - `AuthPreflight.javaClass`：拿到的是 `Class<AuthPreflight>`，
-     *   要的是实例；`javaClass` 还是实例上的扩展属性，绕一圈仍旧需要实例
-     * - `TypeLiteral<AuthPreflight>() {}.getType()`：TypeLiteral 是 CDI 的
-     *   泛型擦除工具，对普通 Kotlin object 毫无意义，运行时拿到的是
-     *   `AuthPreflight` 这个 Class，不是实例
-     *
-     * 只剩静态字段这一条路，而字段名是 Kotlin 的公开约定（`INSTANCE`），
-     * 和 `object Foo` 一一对应，不会随版本漂移。
-     */
-    private val instance: AuthPreflight = AuthPreflight::class.java
-        .getField("INSTANCE")
-        .get(null) as AuthPreflight
 
     // ---------------------------------------------------------------------
     // shouldWarn / blocksLaunch：按账号类型分流
