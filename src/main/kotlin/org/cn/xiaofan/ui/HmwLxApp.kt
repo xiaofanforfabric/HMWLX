@@ -3,7 +3,6 @@ package org.cn.xiaofan.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -15,10 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.outlined.ViewList
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AccountResolver
@@ -47,6 +45,9 @@ import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
+import org.cn.xiaofan.ui.component.LaunchButton
+import org.cn.xiaofan.ui.component.LaunchOverlay
+import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
 
@@ -88,6 +89,11 @@ fun HmwLxApp() {
     var showAccountSwitch by remember { mutableStateOf(false) }
     // 右侧面板当前所在的页。默认是首页，点入口才进具体功能。
     var panel by remember { mutableStateOf(MainPanel.HOME) }
+    // 启动按钮的动画状态。提到这一层是因为火箭要飞到窗口顶部之外，
+    // 覆盖层必须画在最外层 Box 里，而按钮在很深的内层 ——
+    // 两处只能靠这个共享状态通信。
+    val launchAnim = rememberLaunchAnimationState()
+    val launchScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         state = bootstrap()
@@ -174,6 +180,7 @@ fun HmwLxApp() {
                                         contentAlignment = Alignment.BottomStart,
                                     ) {
                                         LaunchButton(
+                                            state = launchAnim,
                                             onClick = {
                                                 // TODO(human): 启动链路。
                                                 // 现在只打日志，确认点击通路是通的。
@@ -187,6 +194,7 @@ fun HmwLxApp() {
                                                 //      并生成 --uuid / --accessToken / --userType
                                                 //   3. 起子进程并把 stdout 接到界面上的日志面板
                                                 println("[HMWLX] 启动按钮被点击（启动链路尚未实现）")
+                                                launchScope.launch { launchAnim.play() }
                                             },
                                         )
                                     }
@@ -211,6 +219,11 @@ fun HmwLxApp() {
                     }
                 }
             }
+
+            // 启动动画的覆盖层：必须在最外层 Box 的最后，
+            // 这样火箭能飞出主区域内边距、飞出侧栏，一路升到窗口顶边之外。
+            // 放在内层任何一个节点里都会被祖先的布局边界裁掉。
+            LaunchOverlay(state = launchAnim)
         }
     }
 }
@@ -308,48 +321,6 @@ private fun SideMenu(
                 }
             }
         }
-    }
-}
-
-/**
- * 首页左下角的启动按钮。
- *
- * <p>做得比普通按钮大得多（宽 260dp、高 72dp）：它是这张界面唯一的主操作，
- * 尺寸本身就是"点这个"的提示。小按钮压在背景图上会被照片吃掉。
- *
- * <p>白底黑字：背景是亮调海景，白底靠明度对比从图上立出来；
- * 黑字在白底上对比度最高，也不跟背景的冷色相抢。
- * 留一点透明度（0.92）让背景能透出极淡的一层，不至于像贴了张纸。
- */
-@Composable
-private fun LaunchButton(onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier
-            .width(260.dp)
-            .height(72.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.White.copy(alpha = 0.92f),
-            contentColor = Color.Black,
-        ),
-        contentPadding = PaddingValues(horizontal = 28.dp),
-        elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 6.dp,
-            pressedElevation = 2.dp,
-        ),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.PlayArrow,
-            contentDescription = null,
-            modifier = Modifier.size(30.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = text(TextKey.HOME_LAUNCH),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-        )
     }
 }
 
