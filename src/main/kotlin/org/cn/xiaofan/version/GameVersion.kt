@@ -31,6 +31,15 @@ data class GameVersion(
 ) {
     /** 是否可以启动。当前只有「父版本缺失」一种否决理由。 */
     val launchable: Boolean get() = !missingParent
+
+    /**
+     * 是否是愚人节版本。
+     *
+     * <p>不能和 [type] 合成一个枚举值：愚人节版本在 Mojang 的 JSON 里
+     * `type` 写的就是 `snapshot`，判定依据完全不同（版本号对照表），
+     * 混进 [VersionType] 会让「从 JSON 解析类型」这件事失真。
+     */
+    val isAprilFools: Boolean get() = VersionType.isAprilFools(id)
 }
 
 /**
@@ -64,5 +73,29 @@ enum class VersionType {
             "old_alpha" -> OLD_ALPHA
             else -> OTHER
         }
+
+        /**
+         * Mojang 历年愚人节版本的版本号。
+         *
+         * <p>这些版本在版本 JSON 里的 `type` 就是 `snapshot`，**没有任何字段标记它们是愚人节版**，
+         * 所以只能按版本号硬编码。清单来自 Mojang 官方 wiki，每年新增一条。
+         *
+         * <p>不覆盖的代价：新一年的愚人节版本会被当成普通快照显示。
+         * 这是可接受的降级 —— 比维护一张会过期的正则好，也比猜错强。
+         */
+        private val APRIL_FOOLS_VERSIONS = setOf(
+            "15w14a",                 // 2015 Love and Hugs Update
+            "1.rv-pre1",              // 2016 Trendy Update
+            "3d shareware v1.34",     // 2019
+            "20w14infinite",          // 2020 无限维度
+            "22w13oneblockatatime",   // 2022 单方块
+            "23w13a_or_b",            // 2023 投票更新
+            "24w14potato",            // 2024 毒马铃薯
+            "25w14craftmine",         // 2025
+        )
+
+        /** 版本号是否是愚人节版本（大小写不敏感）。 */
+        fun isAprilFools(id: String): Boolean =
+            id.lowercase() in APRIL_FOOLS_VERSIONS
     }
 }
