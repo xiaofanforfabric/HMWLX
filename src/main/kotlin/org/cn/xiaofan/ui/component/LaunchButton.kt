@@ -8,18 +8,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,11 +43,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.version.GameVersion
+import org.cn.xiaofan.version.VersionType
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -100,9 +108,11 @@ fun rememberLaunchAnimationState(): LaunchAnimationState =
  * 黑字在白底上对比度最高，也不跟背景的冷色相抢。
  */
 @Composable
-fun LaunchButton(
+fun LaunchButtonWithVersion(
     state: LaunchAnimationState,
+    currentVersion: GameVersion?,
     onClick: () -> Unit,
+    onOpenVersions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val t = state.progress.value
@@ -111,56 +121,144 @@ fun LaunchButton(
     val press = t.seg(PRESS_START, PRESS_END)
     val scale = 1f - 0.05f * sin(press * PI).toFloat()
 
+    // 抖动：点火后整个按钮被发动机带着颤。
+    // 三个量各自用不同频率，避免看得出"左右左右"的机械感：
+    //   - 横向位移抖得最明显（点火方向感）
+    //   - 纵向位移小一些，否则像在跳
+    //   - 旋转很轻微，只在视觉边缘起作用
+    // 三个都在 SHAKE_END 之前衰减到 0，之后按钮就稳稳停住。
+    val shakeT = t.seg(SHAKE_START, SHAKE_END)
+    val shakeEnv = 1f - shakeT
+
+    val shakeX = sin(shakeT * SHAKE_CYCLES * 2f * PI.toFloat()) * SHAKE_X_PX * shakeEnv
+    val shakeY = sin(shakeT * SHAKE_CYCLES * 3.1f * 2f * PI.toFloat()) * SHAKE_Y_PX * shakeEnv
+    val shakeRot = sin(shakeT * SHAKE_CYCLES * 1.7f * 2f * PI.toFloat()) * SHAKE_ROT_DEG * shakeEnv
+
     // 裂缝余晖：火箭冲出后按钮表面留一圈余热，然后熄灭。
     val scorch = t.seg(CRACK_START, CRACK_END) * (1f - t.seg(SPLIT_END, SPLIT_END + 0.10f))
 
-    Box(
+    Row(
         modifier = modifier
-            .width(BUTTON_WIDTH)
+            .width(TOTAL_WIDTH)
             .height(BUTTON_HEIGHT)
-            // 把按钮在窗口里的真实位置记下来，火箭从这里起飞。
+            // 把整个组件的真实位置记下来，火箭从这里起飞。
             // 必须放在 graphicsLayer 之前：graphicsLayer 会把子树的坐标
             // 变换掉，位置要在变换之前取才准。
             .onGloballyPositioned { state.origin = it.boundsInWindow() }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
+                // 抖动不体现在外边距上，而是走 translation 和 rotation：
+                // 这两项只改变绘制位置，不参与布局。用 offset 的话
+                // 每一帧都会触发布局，整个界面跟着重排。
+                translationX = shakeX
+                translationY = shakeY
+                rotationZ = shakeRot
             }
             .clip(RoundedCornerShape(BUTTON_CORNER))
-            .background(SHELL_FILL)
-            .drawBehind { if (scorch > 0f) drawScorch(scorch) }
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {
-                    if (!state.busy) onClick()
-                },
-            ),
+            .background(SHELL_FILL),
     ) {
-        // 按钮自身不启动动画：谁调用它谁负责 play()，
-        // 因为它还要触发覆盖层的火箭，两件事必须一起安排。
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
+        // ---- 左：启动主按钮 ----
+        Box(
+            modifier = Modifier
+                .width(BUTTON_WIDTH)
+                .fillMaxHeight()
+                .drawBehind { if (scorch > 0f) drawScorch(scorch) }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (!state.busy) onClick() },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = SHELL_CONTENT,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = text(TextKey.HOME_LAUNCH),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SHELL_CONTENT,
+                        fontSize = 22.sp,
+                    )
+                }
+                // 版本名。字号小一档、颜色灰一档：它是补充信息，
+                // 不能跟"启动游戏"抢视线主体。
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    text = versionCaption(currentVersion),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SHELL_CONTENT.copy(alpha = 0.58f),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = BUTTON_WIDTH - 32.dp),
+                )
+            }
+        }
+
+        // ---- 中：分隔线。两个可点区域之间需要一条视觉分界 ----
+        VerticalDivider(
+            modifier = Modifier.fillMaxHeight(),
+            thickness = 1.dp,
+            color = SHELL_CONTENT.copy(alpha = 0.14f),
+        )
+
+        // ---- 右：抽屉按钮 ----
+        Box(
+            modifier = Modifier
+                .width(DRAWER_WIDTH)
+                .fillMaxHeight()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onOpenVersions,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Filled.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(30.dp),
-                tint = SHELL_CONTENT,
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = text(TextKey.HOME_LAUNCH),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = SHELL_CONTENT,
-                fontSize = 22.sp,
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = text(TextKey.HOME_PICK_VERSION),
+                modifier = Modifier.size(26.dp),
+                tint = SHELL_CONTENT.copy(alpha = 0.72f),
             )
         }
     }
 }
+
+/**
+ * 按钮下方的版本说明文字。
+ *
+ * <p>按「有问题先说问题」排：
+ * 1. 没扫出来 → 提示还没选
+ * 2. 扫出来但父版本缺失 → 直接说不能启动，别让用户点了才发现
+ * 3. 正常 → 「版本号 · 类型」
+ */
+@Composable
+private fun versionCaption(version: GameVersion?): String = when {
+    version == null -> text(TextKey.HOME_NO_VERSION)
+    version.missingParent -> text(TextKey.HOME_VERSION_MISSING_PARENT, version.id)
+    else -> "${version.id}  ·  ${text(version.typeTextKey())}"
+}
+
+/** 版本类型对应的文案 key。愚人节优先于快照判定。 */
+private fun GameVersion.typeTextKey(): String = when {
+    isAprilFools -> TextKey.VERSION_TYPE_APRIL_FOOLS
+    else -> when (type) {
+        VersionType.RELEASE -> TextKey.VERSION_TYPE_RELEASE
+        VersionType.SNAPSHOT -> TextKey.VERSION_TYPE_SNAPSHOT
+        VersionType.OLD_BETA -> TextKey.VERSION_TYPE_OLD_BETA
+        VersionType.OLD_ALPHA -> TextKey.VERSION_TYPE_OLD_ALPHA
+        VersionType.OTHER -> TextKey.VERSION_TYPE_OTHER
+    }
+}
+
 
 /**
  * 全屏覆盖层：火箭从按钮位置起飞，一直飞到屏幕顶部之外才消失。
@@ -207,6 +305,13 @@ fun LaunchOverlay(
 // ---------------------------------------------------------------------------
 
 private val BUTTON_WIDTH = 260.dp
+
+/** 右侧抽屉按钮的宽度。只放一个箭头，不需要很宽。 */
+private val DRAWER_WIDTH = 44.dp
+
+/** 左侧主按钮 + 右侧抽屉的总宽。 */
+private val TOTAL_WIDTH = BUTTON_WIDTH + DRAWER_WIDTH + 1.dp
+
 private val BUTTON_HEIGHT = 72.dp
 private val BUTTON_CORNER = 12.dp
 
@@ -237,6 +342,28 @@ private const val CRACK_END = 0.26f
 private const val SPLIT_END = 0.34f
 private const val ROCKET_START = 0.24f
 private const val ROCKET_END = 1.00f
+
+// ---- 抖动参数 ----
+
+/**
+ * 抖动区间。从点击的一瞬间开始，跟受压同时进行 ——
+ * 先抖再缩会显得是两个动作，一起动才是"被发动机顶得发抖"。
+ * 结束得比火箭离场早：火箭飞远以后按钮还在抖就不合逻辑了。
+ */
+private const val SHAKE_START = 0.02f
+private const val SHAKE_END = 0.55f
+
+/** 抖动循环次数。次数决定"抖几下"，越多越急促。 */
+private const val SHAKE_CYCLES = 5.5f
+
+/** 横向振幅（像素）。抖动的主要方向，看得出是左右晃。 */
+private const val SHAKE_X_PX = 7f
+
+/** 纵向振幅（像素）。比横向小，不然会像在原地跳。 */
+private const val SHAKE_Y_PX = 2.5f
+
+/** 旋转振幅（度）。很小，只在边缘看得出来，用来增加"松动"感。 */
+private const val SHAKE_ROT_DEG = 0.55f
 
 /** 把全局进度映射到区间内的 0..1，区间外夹住。 */
 private fun Float.seg(start: Float, end: Float): Float =

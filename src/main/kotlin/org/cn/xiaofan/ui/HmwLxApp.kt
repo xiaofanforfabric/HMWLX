@@ -45,11 +45,13 @@ import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
-import org.cn.xiaofan.ui.component.LaunchButton
+import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
 import org.cn.xiaofan.ui.component.LaunchOverlay
+import org.cn.xiaofan.ui.component.VersionDrawer
 import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
+import org.cn.xiaofan.version.rememberVersionState
 
 /**
  * 启动状态。UI 只依赖这个 sealed 类型，不直接碰 Quarkus。
@@ -94,6 +96,13 @@ fun HmwLxApp() {
     // 两处只能靠这个共享状态通信。
     val launchAnim = rememberLaunchAnimationState()
     val launchScope = rememberCoroutineScope()
+
+    // 版本状态提到这一层：首页的启动按钮要显示当前版本，
+    // 版本页要展示全部。两处共用一份，才能保证在一处改了选择另一处立刻知道。
+    val versions = rememberVersionState()
+
+    // 版本抽屉是否展开。
+    var showVersionDrawer by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         state = bootstrap()
@@ -179,32 +188,55 @@ fun HmwLxApp() {
                                         modifier = Modifier.fillMaxSize(),
                                         contentAlignment = Alignment.BottomStart,
                                     ) {
-                                        LaunchButton(
+                                        LaunchButtonWithVersion(
                                             state = launchAnim,
+                                            currentVersion = versions.selected,
                                             onClick = {
                                                 // TODO(human): 启动链路。
                                                 // 现在只打日志，确认点击通路是通的。
                                                 // 需要的信息都在手边：
                                                 //   - 当前账号: AccountService.currentAccount()
-                                                //   - 选中版本: 由侧栏子菜单维护（selectedVersion）
+                                                //   - 选中版本: versions.selected
                                                 // 分三步实现，各自独立：
                                                 //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
                                                 //      inheritsFrom 链展开成完整启动参数
                                                 //   2. 拼 JVM 参数（-Xmx、natives 目录、--assetIndex）
                                                 //      并生成 --uuid / --accessToken / --userType
                                                 //   3. 起子进程并把 stdout 接到界面上的日志面板
-                                                println("[HMWLX] 启动按钮被点击（启动链路尚未实现）")
+                                                println(
+                                                    "[HMWLX] 启动按钮被点击，版本=" +
+                                                        "${versions.selected?.id ?: "（未选）"}"
+                                                )
                                                 launchScope.launch { launchAnim.play() }
                                             },
+                                            onOpenVersions = { showVersionDrawer = true },
                                         )
+
+                                        // 版本抽屉：贴在按钮正上方弹出。
+                                        // 只在打开时进组合树，关掉就整个卸掉，
+                                        // 免得一个看不见的 Popup 还在监听点击。
+                                        if (showVersionDrawer) {
+                                            VersionDrawer(
+                                                versions = versions.versions,
+                                                selected = versions.selected,
+                                                onSelect = { version ->
+                                                    versions.select(version)
+                                                    showVersionDrawer = false
+                                                },
+                                                onDismiss = { showVersionDrawer = false },
+                                            )
+                                        }
                                     }
 
-                                    MainPanel.VERSIONS -> VersionListScreen(onLaunch = { version ->
-                                        println(
-                                            "[HMWLX] 请求启动版本 ${version.id} " +
-                                                "(类型=${version.type}, 父版本=${version.inheritsFrom})"
-                                        )
-                                    })
+                                    MainPanel.VERSIONS -> VersionListScreen(
+                                        state = versions,
+                                        onLaunch = { version ->
+                                            println(
+                                                "[HMWLX] 请求启动版本 ${version.id} " +
+                                                    "(类型=${version.type}, 父版本=${version.inheritsFrom})"
+                                            )
+                                        },
+                                    )
                                 }
                             }
                         }
