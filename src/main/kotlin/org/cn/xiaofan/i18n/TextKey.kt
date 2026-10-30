@@ -248,6 +248,29 @@ object TextKey {
     /** 通用的关闭按钮。 */
     const val AUTH_DISMISS = "auth.dismiss"
 
+    // ---- 启动中界面 ----
+
+    /** 标题：正在启动。 */
+    const val LAUNCH_TITLE_RUNNING = "launch.title.running"
+
+    /** 标题：启动成功。 */
+    const val LAUNCH_TITLE_DONE = "launch.title.done"
+
+    /** 标题：启动失败。 */
+    const val LAUNCH_TITLE_FAILED = "launch.title.failed"
+
+    /** 日志为空时的占位。 */
+    const val LAUNCH_LOG_EMPTY = "launch.log.empty"
+
+    /** 启动中返回主界面。 */
+    const val LAUNCH_BACK = "launch.back"
+
+    /** 启动结束后关闭界面。 */
+    const val LAUNCH_CLOSE = "launch.close"
+
+    /** 停止游戏进程。 */
+    const val LAUNCH_STOP = "launch.stop"
+
     /** 刷新按钮的无障碍描述。 */
     const val VERSION_REFRESH = "version.refresh"
 

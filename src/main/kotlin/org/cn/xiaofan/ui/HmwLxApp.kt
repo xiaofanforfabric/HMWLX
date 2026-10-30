@@ -2,6 +2,7 @@ package org.cn.xiaofan.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,7 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,7 +38,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
@@ -46,14 +53,21 @@ import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.launch.BackgroundSessionPolicy
+import org.cn.xiaofan.launch.LaunchController
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.component.AuthFailureDialog
+import org.cn.xiaofan.ui.component.BackgroundGameEntry
+import org.cn.xiaofan.ui.component.BackgroundGamesButton
+import org.cn.xiaofan.ui.component.BackgroundGamesDrawer
 import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
 import org.cn.xiaofan.ui.component.LaunchOverlay
+import org.cn.xiaofan.ui.component.LaunchTransition
 import org.cn.xiaofan.ui.component.VersionDrawer
 import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
+import org.cn.xiaofan.ui.screen.LaunchingScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
 import org.cn.xiaofan.version.rememberVersionState
 
@@ -111,26 +125,82 @@ fun HmwLxApp() {
     // 启动前的账号预检结果。非 null 时弹提示框。
     var authFailure by remember { mutableStateOf<AuthPreflight.Result?>(null) }
 
+    // 后台游戏会话的注册表。
+    //
+    // 「关闭」启动界面不会结束游戏 —— 会话留在 registry 里继续跑，
+    // 用户可以随时从齿轮按钮的抽屉里点回来。只有「停止游戏」
+    // 和进程自行退出才真正把它移出列表。
+    val sessions = remember { SessionRegistry() }
+
+    // 当前显示的会话。非 null 时启动界面盖住整个主界面。
+    val launching = sessions.active
+
+    // 齿轮抽屉是否展开。
+    var showSessions by remember { mutableStateOf(false) }
+
+    // 过渡层：火箭飞出窗口之后、启动页完全显示之前的黑场。
+    //
+    // 为什么单独一个状态：这段时间启动页必须**已经在下面渲染并开始工作**
+    // （拉日志、跑协程），只是被遮着。如果等遮罩结束才创建 session，
+    // 玩家会先看到一秒钟空白的白页，然后日志才开始滚。
+    var transitioning by remember { mutableStateOf(false) }
+    var transitionVersion by remember { mutableStateOf("") }
+
     // 真正开始启动。提到这一层是因为它有两个调用方：按钮的点击回调
     // 和提示框里的「仍然启动」—— 后者挂在最外层，拿不到内层局部变量。
     //
     // account 可空：网络失败时拿不到「刷新过的」账号，
     // 只能用存储里的旧账号（由 headlessmc 自己读取）。
     val proceed: (io.github.headlesshq.headlessmc.auth.Account?) -> Unit = { account ->
-        // TODO(human): 启动链路。
-        // account 是刷新过的（或旧的，网络失败时），接下来：
-        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-        //      inheritsFrom 链展开成完整启动参数
-        //   2. 起子进程并把 stdout 接到界面上的日志面板
-        println(
-            "[HMWLX] 开始启动: 账号=${account?.name ?: "（未刷新）"}, " +
-                "版本=${versions.selected?.id ?: "（未选）"}"
-        )
-        launchScope.launch { launchAnim.play() }
+        val version = versions.selected
+        when {
+            account == null -> {
+                // 不该发生：调用方都在拿到账号之后才走到这里。
+                // 真发生了就说明流程接错了，不要静默吞掉。
+                println("[HMWLX] 内部错误：启动时没有账号")
+            }
+            version == null -> {
+                println("[HMWLX] 内部错误：启动时没有选中版本")
+            }
+            else -> {
+                println("[HMWLX] 开始启动: 账号=${account.name}, 版本=${version.id}")
+                transitionVersion = version.id
+
+                // 动画播到「火箭飞出窗口顶部」时才切页 —— 这是关键。
+                //
+                // 以前是动画和切页同时开始，结果火箭还没起飞画面就换了，
+                // 用户根本看不到火箭升空。现在由 play() 在正确的时刻回调。
+                launchScope.launch {
+                    launchAnim.play {
+                        // 火箭已出画：立刻创建启动会话（让它在遮罩下面
+                        // 开始干活），同时拉起黑场过渡。
+                        val session = sessions.create(version.id, account)
+                        sessions.active = session
+                        transitioning = true
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
         state = bootstrap()
+    }
+
+    // 定期清理已结束的会话。
+    //
+    // 注意这里**只负责移除**，不负责刷新界面数值 ——
+    // 角标和抽屉读的是每个会话的 snapshot（mutableStateOf），
+    // 状态变化会自动触发重组。
+    //
+    // 仍然需要这个循环，因为"会话该不该移除"这个判断必须有人做：
+    // 进程退出是外部事件，没有回调能通知我们。
+    // 空闲时循环里什么都不做，零开销。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            if (sessions.sessions.isNotEmpty()) sessions.prune()
+        }
     }
 
     MaterialTheme {
@@ -140,7 +210,52 @@ fun HmwLxApp() {
         Box(modifier = Modifier.fillMaxSize()) {
             AppBackground()
 
-            if (showAccountSwitch) {
+            // 启动画面优先于一切：它盖住背景、侧栏、账号栏。
+            // 判断放在账号切换之前，因为启动中用户不该切账号 ——
+            // 那次启动用的就是启动时那个账号。
+            val session = launching
+            if (session != null) {
+                val launchState by session.controller.state.collectAsState()
+                LaunchingScreen(
+                    state = launchState,
+                    versionId = session.versionId,
+                    // 返回主界面。
+                    //
+                    // **不结束游戏，只把它收到后台。**
+                    // 用户点"返回"的意思是"我不想盯着日志了"，
+                    // 不是"把游戏杀掉"。以前这里调 cancel()，
+                    // 虽然对已启动的进程只是不杀，但会话对象被直接丢弃，
+                    // 界面上再也找不回来 —— 现在它留在 sessions 里。
+                    //
+                    // 唯一要处理的是「启动还没走完」的情况：此时用户确实
+                    // 不想继续启动了，那才需要中止（否则下载会在后台跑完
+                    // 自己起一个游戏出来）。
+                    onBack = {
+                        val st = session.controller.state.value
+                        if (!st.processAlive) {
+                            // 还没起来：真的取消，并从列表移除。
+                            session.controller.cancel()
+                            sessions.sessions.remove(session)
+                        }
+                        // 转到后台，界面回到主界面。
+                        sessions.active = null
+                        transitioning = false
+                    },
+                    onStop = { session.controller.stop() },
+                )
+
+                // 过渡层盖在启动页**上面**。
+                //
+                // 位置很关键：必须放在 LaunchingScreen 之后（z 序更高），
+                // 这样下面的启动页已经在正常渲染、跑协程、收日志，
+                // 只是被黑场遮住。等遮罩淡出时，用户直接看到内容，
+                // 而不是先看到一秒钟空页面。
+                LaunchTransition(
+                    visible = transitioning,
+                    versionId = transitionVersion,
+                    onFinished = { transitioning = false },
+                )
+            } else if (showAccountSwitch) {
                 // 账号切换是整屏页面，需要自己的遮罩保证列表可读，
                 // 所以盖在面板逻辑之上而不是塞进右侧。
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
@@ -213,49 +328,100 @@ fun HmwLxApp() {
                                         modifier = Modifier.fillMaxSize(),
                                         contentAlignment = Alignment.BottomStart,
                                     ) {
-                                        LaunchButtonWithVersion(
-                                            state = launchAnim,
-                                            currentVersion = versions.selected,
-                                            onClick = {
-                                                // 启动前的账号检查。AuthPreflight 内部按
-                                                // 「微软 → 皮肤站 → 离线」的顺序走，
-                                                // 微软必须最先检查（LEGAL/用户协议 承诺了
-                                                // 正版账号走微软官方鉴权）。
-                                                //
-                                                // 这里只负责把结果分流到 UI：
-                                                // - blocksLaunch：账号有问题，拦住并说明
-                                                // - shouldWarn：可以启动，但要让用户知道
-                                                // - 其它：静默放行
-                                                launchScope.launch {
-                                                    val check = AuthPreflight.check()
-                                                    when {
-                                                        check is AuthPreflight.Result.Ready ->
-                                                            proceed(check.account)
+                                        // 启动按钮 + 后台游戏按钮排成一行。
+                                        //
+                                        // 后台按钮放在启动按钮的**右侧**，
+                                        // 仍在主区域内（不是侧栏里）——
+                                        // 它管的是"当前在跑的游戏"，属于内容区的事。
+                                        Row(
+                                            verticalAlignment = Alignment.Bottom,
+                                            horizontalArrangement = Arrangement.spacedBy(440.dp),
+                                        ) {
+                                            LaunchButtonWithVersion(
+                                                state = launchAnim,
+                                                currentVersion = versions.selected,
+                                                onClick = {
+                                                    // 启动前的账号检查。AuthPreflight 内部按
+                                                    // 「微软 → 皮肤站 → 离线」的顺序走，
+                                                    // 微软必须最先检查（LEGAL/用户协议 承诺了
+                                                    // 正版账号走微软官方鉴权）。
+                                                    //
+                                                    // 这里只负责把结果分流到 UI：
+                                                    // - blocksLaunch：账号有问题，拦住并说明
+                                                    // - shouldWarn：可以启动，但要让用户知道
+                                                    // - 其它：静默放行
+                                                    launchScope.launch {
+                                                        val check = AuthPreflight.check()
+                                                        when {
+                                                            check is AuthPreflight.Result.Ready ->
+                                                                proceed(check.account)
 
-                                                        check.blocksLaunch -> {
-                                                            // 凭据失效 / 无账号 / 认证源不可用。
-                                                            authFailure = check
-                                                        }
+                                                            check.blocksLaunch -> {
+                                                                // 凭据失效 / 无账号 / 认证源不可用。
+                                                                authFailure = check
+                                                            }
 
-                                                        check.shouldWarn -> {
-                                                            // 网络类问题（微软或皮肤站），
-                                                            // 以及皮肤站会话失效。
-                                                            // 都不拦启动，只提示。
-                                                            authFailure = check
-                                                        }
+                                                            check.shouldWarn -> {
+                                                                // 网络类问题（微软或皮肤站），
+                                                                // 以及皮肤站会话失效。
+                                                                // 都不拦启动，只提示。
+                                                                authFailure = check
+                                                            }
 
-                                                        else -> {
-                                                            println(
-                                                                "[HMWLX] 账号检查无影响，" +
-                                                                    "直接启动: ${check.javaClass.simpleName}"
-                                                            )
-                                                            proceed(null)
+                                                            else -> {
+                                                                println(
+                                                                    "[HMWLX] 账号检查无影响，" +
+                                                                        "直接启动: ${check.javaClass.simpleName}"
+                                                                )
+                                                                proceed(null)
+                                                            }
                                                         }
                                                     }
-                                                }
-                                            },
-                                            onOpenVersions = { showVersionDrawer = true },
-                                        )
+                                                },
+                                                onOpenVersions = { showVersionDrawer = true },
+                                            )
+
+                                            // 圆形齿轮：后台游戏入口。
+                                            //
+                                            // 抽屉作为 overlay 传进去（而不是放外面），
+                                            // 这样 Popup 的锚点就是这个按钮本身。
+                                            // 放外面的话锚点会变成整行，抽屉会飞到别处。
+                                            BackgroundGamesButton(
+                                                count = sessions.aliveCount,
+                                                onClick = {
+                                                    // 打开前顺手清理一次，避免列表里
+                                                    // 留着已经退出的会话。
+                                                    sessions.prune()
+                                                    showSessions = !showSessions
+                                                },
+                                                // 底部留 8dp：启动按钮高 72dp、齿轮 56dp，
+                                                // 不做偏移的话齿轮会贴到更下面去。
+                                                modifier = Modifier.padding(bottom = 8.dp),
+                                                overlay = {
+                                                    if (showSessions) {
+                                                        BackgroundGamesDrawer(
+                                                            // entries() 读的是每个会话的
+                                                            // snapshot（可观察），所以抽屉
+                                                            // 开着时 PID 和存活灯会实时更新。
+                                                            entries = sessions.entries(),
+                                                            onEnter = { entry ->
+                                                                sessions.sessions
+                                                                    .firstOrNull { it.id == entry.id }
+                                                                    ?.let { sessions.active = it }
+                                                                showSessions = false
+                                                            },
+                                                            onStop = { entry ->
+                                                                sessions.sessions
+                                                                    .firstOrNull { it.id == entry.id }
+                                                                    ?.let { it.controller.stop() }
+                                                                showSessions = false
+                                                            },
+                                                            onDismiss = { showSessions = false },
+                                                        )
+                                                    }
+                                                },
+                                            )
+                                        }
 
                                         // 版本抽屉：贴在按钮正上方弹出。
                                         // 只在打开时进组合树，关掉就整个卸掉，
@@ -329,6 +495,188 @@ fun HmwLxApp() {
                 onDismiss = { authFailure = null },
             )
         }
+    }
+}
+
+/** 右侧面板当前显示的页。 */
+/**
+ * 一次启动会话。
+ *
+ * <p>把 [LaunchController] 和它需要的独立协程作用域绑在一起：
+ *
+ * - 作用域在会话创建时新建，会话结束时取消。
+ *   不能复用 `rememberCoroutineScope()` —— 那个作用域跟着主界面走，
+ *   用户切走启动画面时不该把它取消（游戏还在跑），
+ *   但日志读取确实该停。
+ *
+ * - 用 `remember` 而不是裸构造：Compose 重组时不能每帧新建一个
+ *   controller，否则状态会丢、日志会重来。
+ */
+private class LaunchSession(
+    /** 会话的稳定标识。自增而不是用 hashCode —— 对象被回收后
+     *  hashCode 可能被复用，导致抽屉里点错条目。 */
+    val id: Long,
+    val versionId: String,
+    account: io.github.headlesshq.headlessmc.auth.Account,
+) {
+    /** 会话自己的作用域，主界面那一层不共享。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val controller = LaunchController(scope)
+
+    /**
+     * 供界面观察的**精简快照**。
+     *
+     * ## 为什么需要它
+     *
+     * `controller.state` 是普通 `StateFlow`，只有被 `collectAsState`
+     * 的地方才会因为它的变化而重组。而主界面只 collect **当前显示**
+     * 那个会话 —— 后台会话推进阶段（PID 从 null 变成真实值、
+     * `processAlive` 由 false 变 true）不会引起任何重组。
+     *
+     * 后果：齿轮抽屉开着的时候，存活灯和 PID 会一直停在打开那一刻的
+     * 旧值，直到有别的重组把它"撞醒"。用户刚启动游戏就点开齿轮，
+     * 看到的是 `PID —` 和灰点，明明游戏已经在跑了。
+     *
+     * ## 做法
+     *
+     * 每个会话创建时启动一个 collect 协程，把关心的几个字段同步到
+     * Compose 的 `mutableStateOf`。这样抽屉和角标读的是**同一个
+     * 可观察源**，不依赖"碰巧有个别的重组"。
+     *
+     * 只同步这三个字段而不是整个 `LaunchState`：后台列表不需要日志
+     * 和进度，同步整个对象会让每次日志追加都触发重组，纯属浪费。
+     */
+    var snapshot by mutableStateOf(SessionSnapshot())
+        private set
+
+    private val watcher = scope.launch {
+        controller.state.collect { st ->
+            val next = SessionSnapshot(
+                pid = st.pid,
+                processAlive = st.processAlive,
+                finished = st.finished,
+                cancelled = st.cancelled,
+            )
+            // 只在真的变了才写，避免无意义的重组。
+            if (next != snapshot) snapshot = next
+        }
+    }
+
+    init {
+        controller.launch(versionId, account)
+    }
+
+    /** 会话彻底结束时停掉观察协程，避免泄漏。 */
+    fun dispose() {
+        watcher.cancel()
+    }
+}
+
+/**
+ * 会话的界面可见状态。
+ *
+ * <p>单独一个类型而不是直接用 `LaunchState`：见 [LaunchSession.snapshot]。
+ */
+data class SessionSnapshot(
+    val pid: Long? = null,
+    val processAlive: Boolean = false,
+    val finished: Boolean = false,
+    val cancelled: Boolean = false,
+)
+
+/**
+ * 后台游戏会话的集合。
+ *
+ * <h2>为什么要单独一个容器</h2>
+ *
+ * 「关闭」启动界面时**不能结束游戏**。用户点关闭的意图是"我不想一直盯着
+ * 日志了"，不是"把游戏杀掉"。以前 onBack 直接 `launching = null`，
+ * 会话对象被丢弃 —— 界面上再也找不回来那个进程了，虽然游戏还在跑。
+ *
+ * 所以会话必须活在一个比「当前显示哪一页」更长寿的地方：这里。
+ *
+ * <h2>为什么用 Compose 的 mutableStateListOf</h2>
+ *
+ * 后台进程列表要参与重组（齿轮按钮上的角标、抽屉里的条目）。
+ * 用普通 list 的话增删不会触发重组，界面就不更新了。
+ */
+private class SessionRegistry {
+    /** 所有还活着的会话。顺序即创建顺序，抽屉里按这个顺序展示。 */
+    val sessions = mutableStateListOf<LaunchSession>()
+
+    /** 当前正在显示的会话。null 表示回到了主界面。 */
+    var active by mutableStateOf<LaunchSession?>(null)
+
+    /** 下一个会话 ID。只增不减，保证唯一。 */
+    private var nextId = 1L
+
+    /** 创建一个新会话并入表。 */
+    fun create(
+        versionId: String,
+        account: io.github.headlesshq.headlessmc.auth.Account,
+    ): LaunchSession {
+        val session = LaunchSession(nextId++, versionId, account)
+        sessions.add(session)
+        return session
+    }
+
+    /**
+     * 移出已经结束的会话。
+     *
+     * <p>判据交给 [BackgroundSessionPolicy]：那里把"下载中"/"运行中"/
+     * "已退出"三种情形讲清楚了，并有测试钉住。这里只负责调用。
+     *
+     * <p>最容易踩的坑：用 `processAlive` 单条件判会把**还在下载**的会话
+     * 也移掉（那时进程还不存在），用 `finished` 单条件判会把
+     * **正在跑的游戏**移掉（窗口加载后就 finished 了）。
+     */
+    fun prune() {
+        val removed = sessions.filter { s ->
+            val snap = s.snapshot
+            !BackgroundSessionPolicy.shouldKeep(
+                finished = snap.finished,
+                processAlive = snap.processAlive,
+                cancelled = snap.cancelled,
+            )
+        }
+        if (removed.isEmpty()) return
+
+        sessions.removeAll(removed)
+        // 停掉每个被移除会话的观察协程，否则它会一直 collect 一个
+        // 已经没人要的 StateFlow，白占一个协程和一份内存。
+        removed.forEach { it.dispose() }
+    }
+
+    /**
+     * 真正在跑的游戏数量，供齿轮角标读取。
+     *
+     * <p>这是个**派生状态**：读 `sessions` 里每个会话的 `snapshot`，
+     * 而 snapshot 是 `mutableStateOf` —— 所以任何会话的
+     * `processAlive` 变化都会让读到这里的 Composable 重组。
+     *
+     * <p>以前这里是个手动的 `mutableStateOf` + 每秒轮询，
+     * 只在**数量**变化时才写值。那导致 PID 变化不触发重组，
+     * 抽屉里的 `PID —` 会一直显示旧值。现在改成直接派生，
+     * 轮询整个删掉了。
+     */
+    val aliveCount: Int
+        get() = sessions.count { it.snapshot.processAlive }
+
+    /**
+     * 抽屉要显示的条目。
+     *
+     * <p>同样读 snapshot 而不是 `controller.state.value` ——
+     * 后者不是可观察的，抽屉开着时不会随会话状态更新。
+     */
+    fun entries(): List<BackgroundGameEntry> = sessions.map { s ->
+        val snap = s.snapshot
+        BackgroundGameEntry(
+            id = s.id,
+            versionId = s.versionId,
+            pid = snap.pid,
+            running = snap.processAlive,
+        )
     }
 }
 
