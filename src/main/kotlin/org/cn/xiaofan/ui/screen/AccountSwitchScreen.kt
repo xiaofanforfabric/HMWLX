@@ -485,7 +485,12 @@ private fun RowAvatar(profile: AccountProfile) {
 
     LaunchedEffect(profile.avatarKey) {
         avatar = null
-        avatar = AvatarLoader.load(profile.avatar)
+        // 两阶段：先显示缓存（不闪空白），网络返回新图后再静默替换。
+        AvatarLoader.loadCached(
+            profile = profile,
+            onCached = { avatar = it },
+            onRefreshed = { avatar = it },
+        )
     }
 
     val size = 32.dp

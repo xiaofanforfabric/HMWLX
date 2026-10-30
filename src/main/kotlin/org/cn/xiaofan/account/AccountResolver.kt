@@ -285,8 +285,32 @@ object AccountResolver {
      * - macOS：`~/Library/Application Support/headlessmc`
      */
     private fun headlessMcConfigFile(): java.io.File? {
+        val dir = headlessMcConfigDir() ?: return null
+        return java.io.File(dir, "config.properties")
+    }
+
+    /**
+     * headlessmc 的配置根目录。
+     *
+     * <p>从 [headlessMcConfigFile] 里拆出来，是因为除了配置文件本身，
+     * 还有别的东西要往同一个目录下放（比如 [AvatarCache]）。
+     * 拆开之后「配置目录在哪」只有一处定义，避免两边推导规则漂移。
+     *
+     * @return 无法确定时返回 null（拿不到 user.home 之类的极端情况）
+     */
+    internal fun configRoot(): java.io.File {
+        // 兜底用当前目录：正常环境不会走到这里，但返回一个确定的值
+        // 比让调用方处理 null 更省事 —— 缓存目录建不出来时写缓存自然失败，
+        // 那条路径已经有错误处理。
+        return headlessMcConfigDir() ?: java.io.File(".")
+    }
+
+    /**
+     * 按平台推导 headlessmc 的配置目录。
+     */
+    private fun headlessMcConfigDir(): java.io.File? {
         val os = System.getProperty("os.name").orEmpty().lowercase()
-        val dir = when {
+        return when {
             os.contains("win") -> System.getenv("APPDATA")?.let { java.io.File(it, "headlessmc") }
             os.contains("mac") -> java.io.File(System.getProperty("user.home"), "Library/Application Support/headlessmc")
             else -> {
@@ -294,7 +318,6 @@ object AccountResolver {
                 if (!xdg.isNullOrBlank()) java.io.File(xdg, "headlessmc")
                 else java.io.File(System.getProperty("user.home"), ".config/headlessmc")
             }
-        } ?: return null
-        return java.io.File(dir, "config.properties")
+        }
     }
 }
