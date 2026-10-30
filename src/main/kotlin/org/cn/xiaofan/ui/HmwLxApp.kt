@@ -58,11 +58,9 @@ import org.cn.xiaofan.launch.LaunchController
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.component.AuthFailureDialog
-import org.cn.xiaofan.ui.component.BACKGROUND_DRAWER_WIDTH
 import org.cn.xiaofan.ui.component.BackgroundGameEntry
 import org.cn.xiaofan.ui.component.BackgroundGamesButton
 import org.cn.xiaofan.ui.component.BackgroundGamesDrawer
-import org.cn.xiaofan.ui.component.GEAR_BUTTON_SIZE
 import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
 import org.cn.xiaofan.ui.component.LaunchOverlay
 import org.cn.xiaofan.ui.component.LaunchTransition
