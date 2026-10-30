@@ -109,6 +109,27 @@ object AuthPreflight {
         ) : Result
 
         /**
+         * 会话已失效，但**仍可启动**（按离线跑）。
+         *
+         * <p>目前只由皮肤站产生：上游 `YggdrasilAuthProvider.refresh` 在
+         * token 被服务器拒绝时**不抛异常**，而是返回一个 token 为空串的账号
+         * （见 `withoutToken()`），让游戏按离线模式启动。
+         *
+         * <p>这与 [CredentialInvalid] 的区别：
+         * - [CredentialInvalid]：**阻止启动**。凭据问题，重试没用，必须重新登录。
+         * - [SessionExpired]：**允许启动**。单人游戏照常玩，只是联机时
+         *   服务器会以 `invalid session` 拒绝。用户需要知道这件事，
+         *   但不该因此连单机都玩不了。
+         *
+         * @property account 上游返回的、token 已被清空的账号
+         * @property detail 底层原因
+         */
+        data class SessionExpired(
+            val account: Account,
+            val detail: String,
+        ) : Result
+
+        /**
          * 账号所属的认证源当前不可用（比如 Yggdrasil 站没配置 url、
          * 或者 provider 被禁用）。
          */
@@ -129,34 +150,48 @@ object AuthPreflight {
     suspend fun check(): Result = withContext(Dispatchers.IO) {
         val account = readCurrentAccount() ?: return@withContext Result.NoAccount
 
-        // 离线账号没有 token，刷新没有意义，直接放行。
-        // 对离线账号调 refresh 会走到 AuthProvider.OFFLINE 的实现，
-        // 它返回的也是原对象，但少一次无谓的分支判断。
-        if (AuthProvider.OFFLINE.equals(account.provider, ignoreCase = true)) {
-            return@withContext Result.Ready(account)
+        // =====================================================================
+        // 账号检查的顺序是**有意为之**，不要随手调整。
+        //
+        // 1. 微软账号 —— 必须最先检查。
+        //    LEGAL/用户协议 里明确写了正版账号的鉴权走微软官方渠道，
+        //    这不只是技术选择，是法律层面的承诺：未经检查就启动，
+        //    等于跳过了协议规定的鉴权环节。
+        //    所以微软账号的检查放在最前面，任何情况下都不能被跳过。
+        //
+        // 2. 皮肤站账号 —— 微软检查通过（或当前账号不是微软账号）之后才走。
+        //    皮肤站有自己的服务器，与微软无关。
+        //
+        // 3. 离线账号 —— 没有 token，什么都不用做。
+        // =====================================================================
+
+        // ---- 步骤 1：微软账号必须最先检查 ----
+        if (account.isMicrosoftAccount) {
+            return@withContext checkMicrosoft(account)
         }
 
-        // 只有微软账号需要找微软续期。
-        //
-        // 皮肤站走自己的服务器，「微软连不上」既不影响它，也不该拿
-        // 微软的错误文案去吓用户。这里提前放行，而不是等 refresh 抛异常
-        // 再由 shouldWarn 过滤 —— 后者会让用户每次启动都白等两次 HTTP 超时，
-        // 而且那条路径上的错误信息跟账号类型是错配的。
-        //
-        // 注意：皮肤站的 token 也可能是过期的，但那要让皮肤站自己报错，
-        // 不是我们在启动前猜。
-        if (!account.isMicrosoftAccount) {
-            return@withContext Result.Ready(account)
+        // ---- 步骤 2：皮肤站账号 ----
+        if (account.isYggdrasilAccount) {
+            return@withContext checkYggdrasil(account)
         }
 
-        val authService = runCatching {
-            HeadlessMcBootstrap.bean(AuthService::class.java)
-        }.getOrElse {
-            return@withContext Result.Unexpected(
-                detail = it.message ?: it.javaClass.simpleName,
-                cause = it,
-            )
-        }
+        // ---- 步骤 3：离线账号（以及未知 provider）----
+        // 离线账号没有 token，刷新没有意义。对离线账号调 refresh 会走到
+        // AuthProvider.OFFLINE 的实现，它返回的也是原对象，但少一次无谓的分支判断。
+        Result.Ready(account)
+    }
+
+    /**
+     * 微软账号检查。
+     *
+     * <p>`refresh()` 会续期 token 并返回新对象（[Account] 的字段都是 final，
+     * 刷新不会原地改旧对象）。失败时按异常分类，交给 UI 决定是否提示。
+     */
+    private suspend fun checkMicrosoft(account: Account): Result = withContext(Dispatchers.IO) {
+        val authService = authServiceOrNull() ?: return@withContext Result.Unexpected(
+            detail = "无法取得 AuthService",
+            cause = null,
+        )
 
         try {
             Result.Ready(authService.refresh(account))
@@ -168,6 +203,58 @@ object AuthPreflight {
             classify(account, e)
         }
     }
+
+    /**
+     * 皮肤站账号检查。
+     *
+     * <p>复刻上游 `YggdrasilAuthProvider.refresh` 的三种结局：
+     *
+     * 1. **token 仍有效** —— 上游先 `validate`，有效就直接返回原账号，
+     *    连 refresh 请求都不发。
+     * 2. **token 过期且刷新成功** —— 拿到新 token，正常启动。
+     * 3. **token 被撤销** —— 上游**不抛异常**，而是返回一个 token 为空串的
+     *    账号（见 `withoutToken()`），让游戏按离线跑。此时我们要把它识别出来，
+     *    提示「登录失效，需要重新登录」，但**仍允许启动**（转离线）。
+     * 4. **服务器连不上** —— 上游抛 `AuthException`，与微软的网络失败同等待遇：
+     *    提示，并允许用户选择仍然启动。
+     *
+     * <p>第 3 点是最容易漏的：上游把「会话失效」做成了**静默降级**，
+     * 不抛异常、只打日志。如果只看异常，就会以为一切正常，
+     * 用户进服被踢时才发现 token 早就空了。
+     */
+    private suspend fun checkYggdrasil(account: Account): Result = withContext(Dispatchers.IO) {
+        val authService = authServiceOrNull() ?: return@withContext Result.Unexpected(
+            detail = "无法取得 AuthService",
+            cause = null,
+        )
+
+        val refreshed = try {
+            authService.refresh(account)
+        } catch (e: AuthException) {
+            // 连不上服务器走这里。分类逻辑与微软共用（网络/限流/凭据）。
+            return@withContext classify(account, e)
+        } catch (e: Exception) {
+            return@withContext classify(account, e)
+        }
+
+        // 上游用「token 为空串」表示会话失效并降级为离线，
+        // 见 YggdrasilAuthProvider.withoutToken() 及其测试：
+        //   assertEquals("", expired.getToken(), "the game must not receive a stale token")
+        //
+        // 这不是异常，是正常返回，所以必须在这里显式识别。
+        if (refreshed.token.isNullOrBlank()) {
+            return@withContext Result.SessionExpired(
+                account = refreshed,
+                detail = "皮肤站会话已失效，上游已降级为离线",
+            )
+        }
+
+        Result.Ready(refreshed)
+    }
+
+    /** 取 AuthService，容器未就绪时返回 null。 */
+    private fun authServiceOrNull(): AuthService? =
+        runCatching { HeadlessMcBootstrap.bean(AuthService::class.java) }.getOrNull()
 
     /**
      * 按异常链分类。
@@ -320,29 +407,31 @@ object AuthPreflight {
 /**
  * 这个结果该不该打扰用户。
  *
- * <p>分两类：
- *
- * **永远提示**（账号本身有问题，不处理就没法玩）：
+ * <p>**永远提示**（不管哪种账号）：
  * - [AuthPreflight.Result.CredentialInvalid]、[AuthPreflight.Result.NoAccount]、
  *   [AuthPreflight.Result.ProviderUnavailable]、[AuthPreflight.Result.Unexpected]
+ * - [AuthPreflight.Result.SessionExpired]：皮肤站会话失效，允许启动但要告知
  *
  * **看账号类型**：
  * - [AuthPreflight.Result.NetworkFailure]、[AuthPreflight.Result.RateLimited]
- *   只在**微软账号**上提示。
+ *   在**微软账号**和**皮肤站账号**上提示，离线账号不提示。
  *
- * <p>为什么要按账号类型分：微软账号的 token 是有期限的，需要定期找微软续期。
- * 微软连不上 → 这次续不了 → token 可能真的过期了，用户该知道。
+ * <p>为什么皮肤站也要提示网络问题：皮肤站账号的 token 同样有期限，
+ * 服务器连不上就没法续期，进服时同样会被以 `invalid session` 拒绝。
+ * 「微软连不上」这件事本身跟皮肤站无关，但「皮肤站连不上」是它自己的问题，
+ * 该让用户知道。
  *
- * <p>离线账号根本没有 token，皮肤站走的是自己的服务器 —— 微软连不上
- * 跟它们毫无关系，弹窗纯属干扰。而且这两类账号启动后要去验证的
- * 也不是微软服务器，提示「可能进不了正版验证服务器」是错的。
+ * <p>为什么离线账号不提示：它根本没有 token，不发任何请求，
+ * 也就不可能有网络失败。走到这里只能说明取账号时出了岔子，
+ * 那种情况会落到 [AuthPreflight.Result.Unexpected]，那边本来就会提示。
  */
 val AuthPreflight.Result.shouldWarn: Boolean
     get() = when (this) {
         is AuthPreflight.Result.Ready -> false
-        is AuthPreflight.Result.NetworkFailure -> account.isMicrosoftAccount
-        is AuthPreflight.Result.RateLimited -> account.isMicrosoftAccount
+        is AuthPreflight.Result.NetworkFailure -> account.isMicrosoftAccount || account.isYggdrasilAccount
+        is AuthPreflight.Result.RateLimited -> account.isMicrosoftAccount || account.isYggdrasilAccount
         is AuthPreflight.Result.CredentialInvalid -> true
+        is AuthPreflight.Result.SessionExpired -> true
         is AuthPreflight.Result.NoAccount -> true
         is AuthPreflight.Result.ProviderUnavailable -> true
         is AuthPreflight.Result.Unexpected -> true
@@ -353,12 +442,16 @@ val AuthPreflight.Result.shouldWarn: Boolean
  *
  * <p>只有账号本身有问题的才拦：网络类问题是暂时的，token 大概率还有效，
  * 拦住用户反而让他玩不了单机。
+ *
+ * <p>[AuthPreflight.Result.SessionExpired] 也**不拦**：上游已经把账号降级成离线，
+ * 单人游戏完全正常，只是联机时会失败。用户需要知道，但不该因此玩不了单机。
  */
 val AuthPreflight.Result.blocksLaunch: Boolean
     get() = when (this) {
         is AuthPreflight.Result.Ready -> false
         is AuthPreflight.Result.NetworkFailure -> false
         is AuthPreflight.Result.RateLimited -> false
+        is AuthPreflight.Result.SessionExpired -> false
         is AuthPreflight.Result.CredentialInvalid -> true
         is AuthPreflight.Result.NoAccount -> true
         is AuthPreflight.Result.ProviderUnavailable -> true
@@ -372,6 +465,39 @@ val AuthPreflight.Result.blocksLaunch: Boolean
  * provider 取值 `OFFLINE` / `YGGDRASIL` / `DEFAULT`）。
  * 比较时忽略大小写，因为 provider 字符串来自磁盘上的 JSON，
  * 大小写不受我们控制。
+ *
+ * <p>**别看 `Account.type`**：那是账号类型（`msa` / `legacy`），
+ * 离线账号的 `type` 也是 `msa`，误看它会把离线账号当成微软账号。
  */
 internal val Account.isMicrosoftAccount: Boolean
     get() = AuthProvider.DEFAULT.equals(provider, ignoreCase = true)
+
+/**
+ * 是不是皮肤站（Yggdrasil）账号。
+ *
+ * <p>同理，比较 provider 而不是 type —— `YggdrasilAuthProvider.TYPE` 的值是
+ * `legacy`，而 `Account.type` 在很多情况下都会是 `legacy`，不能作为判据。
+ */
+internal val Account.isYggdrasilAccount: Boolean
+    get() = AuthProvider.YGGDRASIL.equals(provider, ignoreCase = true)
+
+/**
+ * 这个账号的令牌由哪台服务器的鉴权服务签发，用于文案里的「无法连接 XXX」。
+ *
+ * <p>两类账号连的是完全不同的服务，混用会导致错误归因：
+ * - 微软账号连 `login.microsoftonline.com` 和 `api.minecraftservices.com`
+ * - 皮肤站连用户自己填的那个站点（LittleSkin、Blessed Skin 等），
+ *   与微软毫无关系
+ *
+ * <p>所以文案不能说死「微软服务器」—— 皮肤站账号看到这句话会去检查
+ * 微软的状态，而问题根本不在那边。
+ *
+ * <p>离线账号不会走到任何需要这个名称的地方（它不发请求），这里给个
+ * 兜底值只是为了属性完备，不代表它真的会用来连服务器。
+ */
+val Account.authServerLabel: String
+    get() = when {
+        isMicrosoftAccount -> "微软服务器"
+        isYggdrasilAccount -> "外置登录服务器"
+        else -> "认证服务器"
+    }

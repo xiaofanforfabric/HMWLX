@@ -262,17 +262,19 @@ class AuthPreflightTest {
         val offline = accountWith(AuthProvider.OFFLINE)
         val result = AuthPreflight.Result.NetworkFailure(offline, "timeout")
 
-        assertEquals(false, result.shouldWarn, "离线账号不该因为微软连不上被打扰")
+        assertEquals(false, result.shouldWarn, "离线账号不该因为网络问题被打扰")
         assertEquals(false, result.blocksLaunch)
     }
 
     @Test
-    fun `皮肤站的网络失败不提示也不阻止`() {
+    fun `皮肤站的网络失败要提示但不阻止`() {
+        // 皮肤站账号的 token 同样有期限，服务器连不上就没法续期，
+        // 进服时会被以 invalid session 拒绝。该让用户知道。
         val yggdrasil = accountWith(AuthProvider.YGGDRASIL)
         val result = AuthPreflight.Result.NetworkFailure(yggdrasil, "timeout")
 
-        assertEquals(false, result.shouldWarn, "皮肤站走自己的服务器，与微软无关")
-        assertEquals(false, result.blocksLaunch)
+        assertTrue(result.shouldWarn, "皮肤站连不上要让用户知道")
+        assertEquals(false, result.blocksLaunch, "网络问题不该阻止启动")
     }
 
     @Test
@@ -281,6 +283,79 @@ class AuthPreflightTest {
         val result = AuthPreflight.Result.RateLimited(offline, 60, "429")
 
         assertEquals(false, result.shouldWarn)
+    }
+
+    @Test
+    fun `皮肤站的 429 限流要提示但不阻止`() {
+        val yggdrasil = accountWith(AuthProvider.YGGDRASIL)
+        val result = AuthPreflight.Result.RateLimited(yggdrasil, 60, "429")
+
+        assertTrue(result.shouldWarn)
+        assertEquals(false, result.blocksLaunch)
+    }
+
+    // ---------------------------------------------------------------------
+    // 皮肤站会话失效（上游静默降级成离线）
+    //
+    // 上游 YggdrasilAuthProvider.refresh 在 token 被服务器拒绝时**不抛异常**，
+    // 而是返回一个 token 为空串的账号。这条路径最容易漏 —— 只看异常会以为
+    // 一切正常，用户进服被踢时才发现 token 早就空了。
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `皮肤站会话失效要提示但不阻止启动`() {
+        // 上游把 token 清空后返回，不抛异常。
+        val expired = accountWith(AuthProvider.YGGDRASIL).let {
+            Account(it.provider, it.name, it.uuid, "", it.type, it.xuid)
+        }
+        val result = AuthPreflight.Result.SessionExpired(expired, "会话失效")
+
+        assertTrue(result.shouldWarn, "会话失效必须告知用户")
+        assertEquals(
+            false,
+            result.blocksLaunch,
+            "上游已降级成离线，单人游戏正常，不该拦",
+        )
+    }
+
+    @Test
+    fun `会话失效的账号 token 是空串`() {
+        // 锁定上游的判定约定：token 为空串 = 会话失效。
+        // 见 YggdrasilAuthProviderTest 里的
+        // assertEquals("", expired.getToken(), "the game must not receive a stale token")
+        val expired = accountWith(AuthProvider.YGGDRASIL).let {
+            Account(it.provider, it.name, it.uuid, "", it.type, it.xuid)
+        }
+        assertTrue(expired.token.isNullOrBlank(), "空 token 是判定会话失效的信号")
+    }
+
+    // ---------------------------------------------------------------------
+    // 文案里的服务器名称
+    //
+    // 两类账号连的是完全不同的服务。文案说死「微软服务器」会让皮肤站用户
+    // 去检查微软的状态，而问题根本不在那边。
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `微软账号的网络问题文案提到微软服务器`() {
+        assertEquals("微软服务器", accountWith(AuthProvider.DEFAULT).authServerLabel)
+    }
+
+    @Test
+    fun `皮肤站的网络问题文案不提微软`() {
+        val label = accountWith(AuthProvider.YGGDRASIL).authServerLabel
+
+        assertEquals("外置登录服务器", label)
+        assertTrue(!label.contains("微软"), "皮肤站账号与微软无关，不能提微软")
+    }
+
+    @Test
+    fun `离线账号的兜底名称不指向任何一方`() {
+        // 离线账号不发请求，这个名称理论上用不到，但属性要完备。
+        val label = accountWith(AuthProvider.OFFLINE).authServerLabel
+
+        assertTrue(!label.contains("微软"), "离线账号与微软无关")
+        assertEquals("认证服务器", label)
     }
 
     @Test

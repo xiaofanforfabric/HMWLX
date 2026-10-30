@@ -75,7 +75,7 @@ object AvatarLoader {
     )
 
     /**
-     * 下载并裁出头像。
+     * 下载并裁出头像（只有 URL，没有账号身份，不写缓存）。
      *
      * @return 8x8 的头部图，失败时返回 null（界面回退到占位符）
      */
@@ -94,22 +94,127 @@ object AvatarLoader {
         }
     }
 
-    /** 读内置皮肤并裁出头部。 */
-    private fun loadBuiltIn(resourcePath: String): ImageBitmap? = try {
-        val bytes = AvatarLoader::class.java.getResourceAsStream(resourcePath)?.use { it.readBytes() }
-        if (bytes == null) {
-            System.err.println("[Avatar] 内置皮肤资源缺失: $resourcePath")
-            null
-        } else {
-            cropHead(Image.makeFromEncoded(bytes).toComposeImageBitmap())
+    /**
+     * 按账号加载头像，**带磁盘缓存，先本地后网络**。
+     *
+     * <h2>为什么必须先给缓存</h2>
+     *
+     * 网络请求要几十毫秒到几秒（DNS、TLS、Mojang 偶尔几百毫秒才响应）。
+     * 如果等网络返回后才显示头像，用户会在这段时间看到首字母占位 ——
+     * 明明本地就有上次缓存的图，却先闪一下空白再跳成头像，观感很差，
+     * 像是加载失败了一次。
+     *
+     * 所以拆成两步：
+     * 1. **立刻**回调缓存（如果有），界面马上有头像
+     * 2. 后台刷新，成功后回调新头像并写盘；失败就什么都不做
+     *
+     * 这样两种情况都好看：
+     * - 有缓存：头像从头到尾都在，只在皮肤真变了时静默换图
+     * - 没缓存：首字母占位 → 网络返回后变头像（无法避免，但只有第一次）
+     *
+     * <h2>为什么不做 TTL</h2>
+     *
+     * 头像的唯一失效信号是「用户换了皮肤」，而我们无从感知这个事件。
+     * 每次启动都尝试刷新是最保守的策略 —— 有网就跟上，没网就吃老本。
+     *
+     * <p>内置皮肤（离线账号）不走这条路：它就在 jar 里，直接读。
+     *
+     * @param profile 账号信息，用 [AccountProfile.avatarKey] 定位缓存
+     * @param onCached 缓存命中时立刻回调。在主线程调用，方便直接更新 Compose 状态。
+     * @param onRefreshed 网络刷新成功时回调。同样在主线程。
+     * @return 最终的头像。缓存命中的情况下这是缓存图（刷新结果通过
+     *   [onRefreshed] 另外给出），缓存未命中时是网络结果。
+     */
+    suspend fun loadCached(
+        profile: AccountProfile,
+        onCached: (ImageBitmap) -> Unit = {},
+        onRefreshed: (ImageBitmap) -> Unit = {},
+    ): ImageBitmap? = withContext(Dispatchers.IO) {
+        val source = profile.avatar
+
+        // ---- 内置皮肤：也是「立刻可显示」，走同一个回调 ----
+        // 这里必须回调 onCached，而不是只返回：
+        // 调用方通常写成 `loadCached(profile, onCached = { avatar = it })`
+        // 然后忽略返回值（因为它们不 await 结果，只依赖回调更新状态）。
+        // 早期版本在这里直接 return 不回调，导致离线账号的头像
+        // 永远是 null，界面退化成首字母占位 —— 内置的 Steve 明明就在 jar 里。
+        if (source is AvatarSource.BuiltInSkin) {
+            val builtIn = loadBuiltIn(source.resourcePath)
+            if (builtIn != null) {
+                withContext(Dispatchers.Main) { onCached(builtIn) }
+            }
+            return@withContext builtIn
         }
-    } catch (t: Throwable) {
-        System.err.println("[Avatar] 内置皮肤加载失败 $resourcePath: ${t.javaClass.simpleName}: ${t.message}")
-        null
+
+        // ---- 第一步：本地缓存，立刻交给界面 ----
+        // 放在网络请求之前，这是整个策略的核心：用户先看到头像，
+        // 拿到新图之后才静默替换。
+        val cached = AvatarCache.read(profile)
+        if (cached != null) {
+            withContext(Dispatchers.Main) { onCached(cached) }
+        }
+
+        // 没有可用网络来源：有缓存就够了，没有也只能返回 null。
+        // 这种情况理论上少见（来源是推导出来的，不会突然消失），
+        // 但如果 provider 配置变了，旧缓存仍比什么都没有强。
+        if (source !is AvatarSource.Remote) {
+            return@withContext cached
+        }
+
+        // ---- 第二步：后台刷新 ----
+        // fetchHead 返回的是**位图**，不是编码后的字节。
+        // 这样「网络成功」与「编码成功」是两件独立的事：
+        // 编码失败不该被当成网络失败（理由见 fetchHead 的注释）。
+        val fresh = fetchHead(source.url)
+        if (fresh != null) {
+            // 刷新成功：显示新图，再尽力写盘。
+            // 写盘放在最后：encodeHead 可能失败，但那是缓存的问题，
+            // 不该影响用户看到刚下载的头像。
+            withContext(Dispatchers.Main) { onRefreshed(fresh) }
+            persist(profile, fresh)
+            return@withContext fresh
+        }
+
+        if (cached != null) {
+            System.err.println("[Avatar] 刷新失败，使用缓存: ${profile.name}")
+        }
+
+        // 刷新失败：有缓存就返回缓存（界面已经显示它了），否则 null。
+        cached
     }
 
-    /** 从网络加载皮肤并裁出头部。 */
-    private fun loadRemote(url: String): ImageBitmap? {
+    /**
+     * 把头像写进缓存。
+     *
+     * <p>编码和写盘都可能失败，两者都只打日志，不向上传播 ——
+     * 缓存是「锦上添花」，它坏了不该连累头像显示。
+     *
+     * <p>失败时打不同的日志：编码失败说明像素读取/重排有问题（通常是代码 bug），
+     * 写盘失败说明磁盘/权限有问题（通常是环境问题）。混淆两者会让排查走错方向。
+     */
+    private suspend fun persist(profile: AccountProfile, head: ImageBitmap) {
+        val png = encodeHead(head)
+        if (png == null) {
+            System.err.println("[Avatar] 头像编码失败，本次不写缓存: ${profile.name}")
+            return
+        }
+        AvatarCache.write(profile, png)
+    }
+
+    /**
+     * 下载皮肤并裁出头部，返回**头部位图**。
+     *
+     * <p>返回位图而不是 PNG 字节，是为了让「拿到头像」和「编码成缓存格式」
+     * 彻底解耦。早期版本这里做 `encodeHead(cropHead(skin))` 并返回字节，
+     * 于是编码失败（`encodeHead` 内部用 `runCatching` 吞成 null）会被
+     * 上游误判成**网络失败**：
+     * - 日志打出「刷新失败，使用缓存」，而实际上网络完全正常
+     * - `AvatarCache.write` 永远拿不到字节，缓存永远写不进去，
+     *   用户每次启动都要重新下载皮肤，且每次都走这条看起来像故障的路径
+     *
+     * @return 裁好的头部；网络失败、没配皮肤、或解析失败时返回 null
+     */
+    private fun fetchHead(url: String): ImageBitmap? {
         var failure: String? = null
         return try {
             val skinBytes = if (PROFILE_ENDPOINT.matcher(url).matches()) {
@@ -132,6 +237,100 @@ object AvatarLoader {
             null
         }
     }
+
+    /** 读内置皮肤并裁出头部。 */
+    private fun loadBuiltIn(resourcePath: String): ImageBitmap? = try {
+        val bytes = AvatarLoader::class.java.getResourceAsStream(resourcePath)?.use { it.readBytes() }
+        if (bytes == null) {
+            System.err.println("[Avatar] 内置皮肤资源缺失: $resourcePath")
+            null
+        } else {
+            cropHead(Image.makeFromEncoded(bytes).toComposeImageBitmap())
+        }
+    } catch (t: Throwable) {
+        System.err.println("[Avatar] 内置皮肤加载失败 $resourcePath: ${t.javaClass.simpleName}: ${t.message}")
+        null
+    }
+
+    /** 从网络加载皮肤并裁出头部。 */
+    private fun loadRemote(url: String): ImageBitmap? = fetchHead(url)
+
+    /**
+     * 把裁好的头部编码成 PNG。
+     *
+     * <p>走 Skia：Compose 的 `ImageBitmap` 在桌面端本来就是个 Skia 位图，
+     * 读出 ARGB 像素后重新编码，得到一份独立的字节序列 ——
+     * 这样缓存文件不会因为 `ImageBitmap` 被回收而失效。
+     *
+     * <p>用 `IntArray` 而不是 `ByteBuffer` 传像素：`androidx.compose.ui.graphics`
+     * 在桌面端提供的是 `readPixels(IntArray, ...)` 这个重载，
+     * 它会按 ARGB_8888 逐像素读出来，比手工算 ByteBuffer 的步长更不容易出错。
+     */
+    private fun encodeHead(head: ImageBitmap): ByteArray? = runCatching {
+        val w = head.width
+        val h = head.height
+        val pixels = IntArray(w * h)
+        head.readPixels(
+            buffer = pixels,
+            startX = 0,
+            startY = 0,
+            width = w,
+            height = h,
+            bufferOffset = 0,
+            stride = w,
+        )
+
+        // Skia 要的是 BGRA 排列的字节，而 IntArray 里是 ARGB（A 在高位）。
+        // 逐像素重排，顺手把 alpha 提到最高位之后的位置对齐 Skia 的预期。
+        val bgra = ByteArray(w * h * 4)
+        for (i in pixels.indices) {
+            val argb = pixels[i]
+            val o = i * 4
+            bgra[o] = (argb and 0xFF).toByte()                // B
+            bgra[o + 1] = ((argb shr 8) and 0xFF).toByte()    // G
+            bgra[o + 2] = ((argb shr 16) and 0xFF).toByte()   // R
+            bgra[o + 3] = ((argb shr 24) and 0xFF).toByte()   // A
+        }
+
+        org.jetbrains.skia.Image
+            .makeRaster(
+                org.jetbrains.skia.ImageInfo(
+                    w,
+                    h,
+                    org.jetbrains.skia.ColorType.BGRA_8888,
+                    org.jetbrains.skia.ColorAlphaType.UNPREMUL,
+                ),
+                bgra,
+                w * 4,
+            )
+            .encodeToData()
+            ?.bytes
+    }.getOrNull()
+
+    /**
+     * 把 PNG 字节解码成头部图。
+     *
+     * <p>**主流程不经过这里**：正常加载是「下载皮肤 → 裁头部 → 直接显示 / 编码存盘」，
+     * 不需要中途绕一趟 PNG。这个方法目前只服务于缓存往返测试 ——
+     * 用来验证 `encodeHead` 产出的字节能正确还原（尺寸、颜色通道、alpha）。
+     *
+     * <p>留着而不是删掉：它是那条往返链路的另一半，删了就没法测编码是否正确。
+     */
+    private fun decodeHead(png: ByteArray): ImageBitmap? = runCatching {
+        Image.makeFromEncoded(png).toComposeImageBitmap()
+    }.getOrNull()
+
+    /**
+     * 仅供测试：暴露头像的 PNG 编解码。
+     *
+     * <p>这一对函数是缓存链路里最容易出错的地方 —— 像素格式（ARGB / BGRA）、
+     * 步长、alpha 是否预乘，任何一处错了都会得到颜色诡异的头像，
+     * 而且**不会抛异常**，只是「看起来不对劲」。必须能单独测。
+     */
+    internal fun debugEncodeHead(head: ImageBitmap): ByteArray? = encodeHead(head)
+
+    /** 仅供测试：见 [debugEncodeHead]。 */
+    internal fun debugDecodeHead(png: ByteArray): ImageBitmap? = decodeHead(png)
 
     /**
      * 失败原因要不要往上报。

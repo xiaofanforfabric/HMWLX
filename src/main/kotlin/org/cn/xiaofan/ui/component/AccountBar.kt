@@ -66,7 +66,13 @@ fun AccountBar(
     LaunchedEffect(profile.avatarKey) {
         // 先清空再加载：避免来源切换后新旧图混在一起
         avatar = null
-        avatar = AvatarLoader.load(profile.avatar)
+        // 两阶段：缓存命中时立刻显示（onCached），网络拿到新图后再替换
+        // （onRefreshed）。否则每次启动都要先闪一下首字母占位再跳成头像。
+        AvatarLoader.loadCached(
+            profile = profile,
+            onCached = { avatar = it },
+            onRefreshed = { avatar = it },
+        )
     }
 
     Surface(

@@ -217,17 +217,15 @@ fun HmwLxApp() {
                                             state = launchAnim,
                                             currentVersion = versions.selected,
                                             onClick = {
-                                                // 启动前先查账号，接住 refresh() 的异常。
+                                                // 启动前的账号检查。AuthPreflight 内部按
+                                                // 「微软 → 皮肤站 → 离线」的顺序走，
+                                                // 微软必须最先检查（LEGAL/用户协议 承诺了
+                                                // 正版账号走微软官方鉴权）。
                                                 //
-                                                // 提示规则分两层：
-                                                // 1. 账号本身有问题（凭据失效 / 无账号 / 认证源不可用）
-                                                //    → 阻止启动并弹窗。这类问题不处理就没法玩。
-                                                // 2. 网络类问题（网络不通 / 429 限流）
-                                                //    → **只有微软账号才提示**。微软账号的 token
-                                                //      有期限、需要定期续期，续不上是真的可能过期了；
-                                                //      离线账号没有 token，皮肤站走自己的服务器，
-                                                //      微软连不上跟它们无关，弹窗纯属干扰。
-                                                //    微软账号提示时仍然放行 —— 用户可以自己决定。
+                                                // 这里只负责把结果分流到 UI：
+                                                // - blocksLaunch：账号有问题，拦住并说明
+                                                // - shouldWarn：可以启动，但要让用户知道
+                                                // - 其它：静默放行
                                                 launchScope.launch {
                                                     val check = AuthPreflight.check()
                                                     when {
@@ -235,20 +233,20 @@ fun HmwLxApp() {
                                                             proceed(check.account)
 
                                                         check.blocksLaunch -> {
-                                                            // 账号类问题：拦住。
+                                                            // 凭据失效 / 无账号 / 认证源不可用。
                                                             authFailure = check
                                                         }
 
                                                         check.shouldWarn -> {
-                                                            // 微软账号的网络类问题：提示，但不拦。
-                                                            // 弹窗里给「仍然启动」和「取消」。
+                                                            // 网络类问题（微软或皮肤站），
+                                                            // 以及皮肤站会话失效。
+                                                            // 都不拦启动，只提示。
                                                             authFailure = check
                                                         }
 
                                                         else -> {
-                                                            // 其它账号的网络类问题：静默放行。
                                                             println(
-                                                                "[HMWLX] 网络问题未影响当前账号类型，" +
+                                                                "[HMWLX] 账号检查无影响，" +
                                                                     "直接启动: ${check.javaClass.simpleName}"
                                                             )
                                                             proceed(null)
@@ -309,12 +307,20 @@ fun HmwLxApp() {
             AuthFailureDialog(
                 result = authFailure,
                 onLaunchAnyway = {
-                    // 微软账号的网络类失败：用户选择继续。
-                    // token 可能已过期，但单人游戏不需要它，值得让用户赌一把。
-                    println("[HMWLX] 令牌未刷新，用户选择继续启动")
+                    // 用户选择继续启动。两种来源：
+                    // - NetworkFailure / RateLimited：token 没刷新，但大概率还有效
+                    // - SessionExpired：上游已把 token 清空，会按离线启动
+                    // 两种都用上游给出的账号（SessionExpired 里就是那个空 token 的）。
                     val current = authFailure
                     authFailure = null
-                    proceed((current as? AuthPreflight.Result.NetworkFailure)?.account)
+                    val account = when (current) {
+                        is AuthPreflight.Result.NetworkFailure -> current.account
+                        is AuthPreflight.Result.RateLimited -> current.account
+                        is AuthPreflight.Result.SessionExpired -> current.account
+                        else -> null
+                    }
+                    println("[HMWLX] 账号检查未通过，用户选择继续启动: ${current?.javaClass?.simpleName}")
+                    proceed(account)
                 },
                 onRelogin = {
                     authFailure = null
