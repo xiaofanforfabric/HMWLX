@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.cn.xiaofan.account.AuthPreflight
+import org.cn.xiaofan.account.authServerLabel
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 
@@ -63,8 +64,14 @@ fun AuthFailureDialog(
 
     val spec = when (result) {
         is AuthPreflight.Result.NetworkFailure -> DialogSpec(
-            title = text(TextKey.AUTH_NETWORK_FAILED_TITLE),
-            body = text(TextKey.AUTH_NETWORK_FAILED_BODY, result.account.name),
+            // 服务器名称按账号类型取：微软账号说「微软服务器」，
+            // 皮肤站说「外置登录服务器」。混用会让用户去检查错误的东西。
+            title = text(TextKey.AUTH_NETWORK_FAILED_TITLE, result.account.authServerLabel),
+            body = text(
+                TextKey.AUTH_NETWORK_FAILED_BODY,
+                result.account.authServerLabel,
+                result.account.name,
+            ),
             hint = text(TextKey.AUTH_NETWORK_FAILED_HINT),
             detail = result.detail,
             primary = Button(text(TextKey.AUTH_NETWORK_LAUNCH_ANYWAY), onLaunchAnyway),
@@ -72,12 +79,21 @@ fun AuthFailureDialog(
         )
 
         is AuthPreflight.Result.RateLimited -> DialogSpec(
-            title = text(TextKey.AUTH_NETWORK_FAILED_TITLE),
+            title = text(TextKey.AUTH_NETWORK_FAILED_TITLE, result.account.authServerLabel),
             // 服务器给了 Retry-After 就说出来；拿不到就用笼统的说法。
             body = if (result.retryAfter != null) {
-                text(TextKey.AUTH_RATE_LIMITED_BODY, result.account.name, formatDelay(result.retryAfter))
+                text(
+                    TextKey.AUTH_RATE_LIMITED_BODY,
+                    result.account.authServerLabel,
+                    result.account.name,
+                    formatDelay(result.retryAfter),
+                )
             } else {
-                text(TextKey.AUTH_RATE_LIMITED_BODY_NO_DELAY, result.account.name)
+                text(
+                    TextKey.AUTH_RATE_LIMITED_BODY_NO_DELAY,
+                    result.account.authServerLabel,
+                    result.account.name,
+                )
             },
             hint = text(TextKey.AUTH_NETWORK_FAILED_HINT),
             detail = result.detail,
@@ -92,6 +108,17 @@ fun AuthFailureDialog(
             detail = result.detail,
             primary = Button(text(TextKey.AUTH_CREDENTIAL_RELOGIN), onRelogin),
             secondary = Button(text(TextKey.AUTH_DISMISS), onDismiss),
+        )
+
+        is AuthPreflight.Result.SessionExpired -> DialogSpec(
+            title = text(TextKey.AUTH_SESSION_EXPIRED_TITLE, result.account.name),
+            body = text(TextKey.AUTH_SESSION_EXPIRED_HINT),
+            hint = null,
+            detail = result.detail,
+            // 主按钮是「继续启动」：上游已把账号降级成离线，单人游戏照常玩。
+            // 拦下来反而剥夺了用户玩单机的权利。
+            primary = Button(text(TextKey.AUTH_SESSION_EXPIRED_LAUNCH), onLaunchAnyway),
+            secondary = Button(text(TextKey.AUTH_CREDENTIAL_RELOGIN), onRelogin),
         )
 
         is AuthPreflight.Result.NoAccount -> DialogSpec(

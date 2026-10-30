@@ -227,6 +227,15 @@ object TextKey {
     /** 凭据失效时的按钮：去重新登录。 */
     const val AUTH_CREDENTIAL_RELOGIN = "auth.credential.relogin"
 
+    /** 皮肤站会话失效对话框标题。`{0}` 为账号名。 */
+    const val AUTH_SESSION_EXPIRED_TITLE = "auth.session.expired.title"
+
+    /** 皮肤站会话失效说明：登录失效，需要重新登录，但可以继续启动。 */
+    const val AUTH_SESSION_EXPIRED_HINT = "auth.session.expired.hint"
+
+    /** 皮肤站会话失效时的主按钮：继续启动（转离线）。 */
+    const val AUTH_SESSION_EXPIRED_LAUNCH = "auth.session.expired.launch"
+
     /** 没有可用账号，需要先登录。 */
     const val AUTH_NO_ACCOUNT = "auth.no.account"
 
