@@ -69,19 +69,55 @@ class LaunchAnimationState {
         private set
 
     /**
-     * 播放一遍启动动画。
+     * 火箭是否已经飞出窗口顶部。
+     *
+     * <p>宿主页面靠它决定**什么时候**切换到启动页：
+     * 火箭还在飞的时候切页，用户根本看不到那 1 秒的动画，
+     * 只会觉得"闪了一下就换页了"。必须等它飞出去。
      */
-    suspend fun play() {
+    internal var rocketGone by mutableStateOf(false)
+
+    /**
+     * 播放一遍启动动画。
+     *
+     * <p>分两段播，中间把 [rocketGone] 置 true 并**让出一次调度**，
+     * 好让宿主页面在这个时刻拿到机会做转场 —— 否则整段动画
+     * 会一口气跑完，中间状态没人观察得到。
+     *
+     * @param onRocketGone 火箭飞出窗口顶部时回调。宿主在这里启动转场。
+     */
+    suspend fun play(onRocketGone: suspend () -> Unit = {}) {
         if (busy) return
         busy = true
+        rocketGone = false
         try {
             progress.snapTo(0f)
+
+            // ---- 第一段：按压 → 裂缝 → 火箭起飞直到飞出窗口顶部 ----
+            progress.animateTo(
+                targetValue = ROCKET_GONE_AT,
+                animationSpec = tween(
+                    (ANIMATION_MILLIS * ROCKET_GONE_AT).toInt(),
+                    easing = LinearEasing,
+                ),
+            )
+
+            // 火箭此刻已经出画。先告诉宿主，让它开始转场，
+            // 再继续播剩余部分（按钮上的焦痕余韵）。
+            rocketGone = true
+            onRocketGone()
+
+            // ---- 第二段：余韵（焦痕淡去）。与转场重叠发生 ----
             progress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(ANIMATION_MILLIS, easing = LinearEasing),
+                animationSpec = tween(
+                    (ANIMATION_MILLIS * (1f - ROCKET_GONE_AT)).toInt(),
+                    easing = LinearEasing,
+                ),
             )
         } finally {
             progress.snapTo(0f)
+            rocketGone = false
             busy = false
         }
     }
@@ -342,6 +378,39 @@ private const val CRACK_END = 0.26f
 private const val SPLIT_END = 0.34f
 private const val ROCKET_START = 0.24f
 private const val ROCKET_END = 1.00f
+
+/**
+ * 火箭**完全飞出窗口顶部**时对应的全局进度。
+ *
+ * <h2>怎么算出来的</h2>
+ *
+ * [drawFlyingRocket] 里位置是 `eased = flight²`，纵向插值：
+ *
+ * ```
+ * cy = startY + (endY - startY) * eased
+ * endY = -ROCKET_BODY_PX * 1.6
+ * bodyTop = cy - ROCKET_BODY_PX * 0.58
+ * ```
+ *
+ * 火箭完全不可见 —— 连鼻锥都出画 —— 需要 `bodyTop < 0`：
+ *
+ * ```
+ * startY + (endY - startY) * eased - 0.58 * BODY < 0
+ * ```
+ *
+ * 代入 `startY ≈ 按钮中心 ≈ 500`（典型窗口高度）、`BODY = 72`：
+ * `eased ≈ 0.76`，而 `flight = √eased ≈ 0.87`。
+ *
+ * 保守取 **0.88** —— 宁可多飞一点点确保真的出画，
+ * 也不要让火箭尾巴还挂在屏幕边缘时就被黑场盖住。
+ *
+ * <h2>为什么不能直接用 ROCKET_END</h2>
+ *
+ * `ROCKET_END` 是 1.0，也就是整段 1400ms。用它做第一段的分界，
+ * 第二段时长为 0，等于没分段 —— `onRocketGone` 在动画最后一刻才回调，
+ * 转场和动画首尾相接但没有重叠，观感上会顿一下。
+ */
+private const val ROCKET_GONE_AT = 0.88f
 
 // ---- 抖动参数 ----
 

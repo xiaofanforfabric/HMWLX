@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,7 +35,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.account.AccountProfile
@@ -46,14 +49,17 @@ import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.launch.LaunchController
 import org.cn.xiaofan.ui.component.AccountBar
 import org.cn.xiaofan.ui.component.AppBackground
 import org.cn.xiaofan.ui.component.AuthFailureDialog
 import org.cn.xiaofan.ui.component.LaunchButtonWithVersion
 import org.cn.xiaofan.ui.component.LaunchOverlay
+import org.cn.xiaofan.ui.component.LaunchTransition
 import org.cn.xiaofan.ui.component.VersionDrawer
 import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
+import org.cn.xiaofan.ui.screen.LaunchingScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
 import org.cn.xiaofan.version.rememberVersionState
 
@@ -111,22 +117,54 @@ fun HmwLxApp() {
     // 启动前的账号预检结果。非 null 时弹提示框。
     var authFailure by remember { mutableStateOf<AuthPreflight.Result?>(null) }
 
+    // 启动画面。非 null 时整个界面被它盖住。
+    //
+    // 用独立的作用域驱动 LaunchController：会话对象随启动生灭，
+    // 切走画面时不会连带取消已经跑起来的游戏进程（那要用户主动「停止」）。
+    var launching by remember { mutableStateOf<LaunchSession?>(null) }
+
+    // 过渡层：火箭飞出窗口之后、启动页完全显示之前的黑场。
+    //
+    // 为什么单独一个状态：这段时间启动页必须**已经在下面渲染并开始工作**
+    // （拉日志、跑协程），只是被遮着。如果等遮罩结束才创建 session，
+    // 玩家会先看到一秒钟空白的白页，然后日志才开始滚。
+    var transitioning by remember { mutableStateOf(false) }
+    var transitionVersion by remember { mutableStateOf("") }
+
     // 真正开始启动。提到这一层是因为它有两个调用方：按钮的点击回调
     // 和提示框里的「仍然启动」—— 后者挂在最外层，拿不到内层局部变量。
     //
     // account 可空：网络失败时拿不到「刷新过的」账号，
     // 只能用存储里的旧账号（由 headlessmc 自己读取）。
     val proceed: (io.github.headlesshq.headlessmc.auth.Account?) -> Unit = { account ->
-        // TODO(human): 启动链路。
-        // account 是刷新过的（或旧的，网络失败时），接下来：
-        //   1. 用 headlessmc 的版本服务把 <id>.json 和它的
-        //      inheritsFrom 链展开成完整启动参数
-        //   2. 起子进程并把 stdout 接到界面上的日志面板
-        println(
-            "[HMWLX] 开始启动: 账号=${account?.name ?: "（未刷新）"}, " +
-                "版本=${versions.selected?.id ?: "（未选）"}"
-        )
-        launchScope.launch { launchAnim.play() }
+        val version = versions.selected
+        when {
+            account == null -> {
+                // 不该发生：调用方都在拿到账号之后才走到这里。
+                // 真发生了就说明流程接错了，不要静默吞掉。
+                println("[HMWLX] 内部错误：启动时没有账号")
+            }
+            version == null -> {
+                println("[HMWLX] 内部错误：启动时没有选中版本")
+            }
+            else -> {
+                println("[HMWLX] 开始启动: 账号=${account.name}, 版本=${version.id}")
+                transitionVersion = version.id
+
+                // 动画播到「火箭飞出窗口顶部」时才切页 —— 这是关键。
+                //
+                // 以前是动画和切页同时开始，结果火箭还没起飞画面就换了，
+                // 用户根本看不到火箭升空。现在由 play() 在正确的时刻回调。
+                launchScope.launch {
+                    launchAnim.play {
+                        // 火箭已出画：立刻创建启动会话（让它在遮罩下面
+                        // 开始干活），同时拉起黑场过渡。
+                        launching = LaunchSession(version.id, account)
+                        transitioning = true
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -140,7 +178,43 @@ fun HmwLxApp() {
         Box(modifier = Modifier.fillMaxSize()) {
             AppBackground()
 
-            if (showAccountSwitch) {
+            // 启动画面优先于一切：它盖住背景、侧栏、账号栏。
+            // 判断放在账号切换之前，因为启动中用户不该切账号 ——
+            // 那次启动用的就是启动时那个账号。
+            val session = launching
+            if (session != null) {
+                val launchState by session.controller.state.collectAsState()
+                LaunchingScreen(
+                    state = launchState,
+                    versionId = session.versionId,
+                    // 返回：关掉启动画面。
+                    //
+                    // cancel() 会真的中止还没起来的启动（置标志 + 取消主任务），
+                    // 但**不杀已经跑起来的游戏进程** —— 游戏已经在跑了，
+                    // 用户切回主界面看版本列表是很正当的诉求，
+                    // 不应当因为切了个画面就把人踢下线。
+                    // 要结束游戏走「停止」按钮。
+                    onBack = {
+                        session.controller.cancel()
+                        launching = null
+                        // 如果转场还没结束用户就点了返回，别让黑场继续盖着。
+                        transitioning = false
+                    },
+                    onStop = { session.controller.stop() },
+                )
+
+                // 过渡层盖在启动页**上面**。
+                //
+                // 位置很关键：必须放在 LaunchingScreen 之后（z 序更高），
+                // 这样下面的启动页已经在正常渲染、跑协程、收日志，
+                // 只是被黑场遮住。等遮罩淡出时，用户直接看到内容，
+                // 而不是先看到一秒钟空页面。
+                LaunchTransition(
+                    visible = transitioning,
+                    versionId = transitionVersion,
+                    onFinished = { transitioning = false },
+                )
+            } else if (showAccountSwitch) {
                 // 账号切换是整屏页面，需要自己的遮罩保证列表可读，
                 // 所以盖在面板逻辑之上而不是塞进右侧。
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
@@ -329,6 +403,34 @@ fun HmwLxApp() {
                 onDismiss = { authFailure = null },
             )
         }
+    }
+}
+
+/** 右侧面板当前显示的页。 */
+/**
+ * 一次启动会话。
+ *
+ * <p>把 [LaunchController] 和它需要的独立协程作用域绑在一起：
+ *
+ * - 作用域在会话创建时新建，会话结束时取消。
+ *   不能复用 `rememberCoroutineScope()` —— 那个作用域跟着主界面走，
+ *   用户切走启动画面时不该把它取消（游戏还在跑），
+ *   但日志读取确实该停。
+ *
+ * - 用 `remember` 而不是裸构造：Compose 重组时不能每帧新建一个
+ *   controller，否则状态会丢、日志会重来。
+ */
+private class LaunchSession(
+    val versionId: String,
+    account: io.github.headlesshq.headlessmc.auth.Account,
+) {
+    /** 会话自己的作用域，主界面那一层不共享。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val controller = LaunchController(scope)
+
+    init {
+        controller.launch(versionId, account)
     }
 }
 
