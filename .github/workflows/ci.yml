@@ -37,6 +37,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Skiko 在类加载时 dlopen 自己的 native 库，libskiko-linux-x64.so 依赖 libGL.so.1。
+      # GitHub 的 ubuntu runner 预装了 Mesa / X11，但这是 runner 镜像的巧合而非约定，
+      # 显式装一遍，免得镜像换代后 CI 突然全红（表现是 UnsatisfiedLinkError: libGL.so.1）。
+      - name: Install Skiko native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+            libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+            fontconfig fonts-dejavu-core
+
       # GUI 相关：Compose Desktop 在无头环境跑不了窗口，
       # 但容器启动测试（BootstrapTest）需要 Skiko/JDK 的 headless 支持。
       - name: Run all tests

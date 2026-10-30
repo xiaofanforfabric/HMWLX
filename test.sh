@@ -36,6 +36,10 @@
 #
 # 4. **--no-daemon**：CI 里没有常驻 daemon。本地也用同样的方式跑，
 #    避免「在我机器上是 daemon 缓存后的结果」这类差异。
+# 5. **系统库**：Skiko 在类加载时 dlopen 自己的 native 库，
+#    libskiko-linux-x64.so 依赖 libGL.so.1。开发者机器上基本都有，CI 容器里没有，
+#    于是在 CI 上表现为 UnsatisfiedLinkError: libGL.so.1: cannot open shared object file
+#    —— 八竿子打不着的样子。脚本开头会检查一次并直接说清楚缺什么。
 
 set -euo pipefail
 
@@ -159,6 +163,28 @@ if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     echo ""
     echo "注意：工作区有未提交改动。这些改动会参与构建，"
     echo "      但不会出现在任何提交里 —— CI 测的是提交，不是你的工作区。"
+fi
+
+# ---------------------------------------------------------------------------
+# 系统库检查：Skiko 依赖 libGL
+# ---------------------------------------------------------------------------
+# Compose Desktop 的渲染后端 Skiko 在类加载时就 dlopen libskiko-linux-x64.so，
+# 这个 so 的动态依赖里有 libGL.so.1。缺了它，所有碰到 Skia 的测试
+# （头像编解码、内置皮肤）会一起抛 UnsatisfiedLinkError，看起来像代码坏了。
+# 这里只提示，不代装 —— 装系统包要 sudo，脚本不该悄悄动系统。
+if ! ldconfig -p 2>/dev/null | grep -q 'libGL\.so\.1'; then
+    cat >&2 <<'MSG'
+警告：找不到 libGL.so.1，涉及 Skia 的测试会全部报 UnsatisfiedLinkError。
+
+  Debian/Ubuntu：
+      sudo apt-get install -y libgl1 libglx-mesa0 libgl1-mesa-dri fontconfig
+
+  Fedora/RHEL：
+      sudo dnf install -y mesa-libGL mesa-libGLU fontconfig
+
+CI 里已经装好了（见 .cnb.yml / .github/workflows/ci.yml），本地补上即可。
+MSG
+    echo ""
 fi
 
 echo ""

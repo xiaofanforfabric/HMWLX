@@ -14,6 +14,13 @@
 #
 # ${CNB_COMMIT_MESSAGE_TITLE} 是提交信息首行，
 # 用 grep -qE '^(rel|beta|RC|test):' 判断是否为发布意图提交。
+#
+# 系统库：Compose Desktop 的渲染后端 Skiko 在类加载时 dlopen 自己的
+#      native 库，而 libskiko-linux-x64.so 的动态依赖里有 libGL.so.1。
+#      eclipse-temurin 基础镜像只带 JDK，没有 Mesa / X11 这类图形库，
+#      于是所有碰到 Skia 的测试（头像编解码、内置皮肤）直接
+#      UnsatisfiedLinkError: libGL.so.1: cannot open shared object file。
+#      这些库必须在【宿主】装：CNB 的 docker 构建里 ./gradlew 跑在宿主机上。
 
 # 兜底：所有分支
 "**":
@@ -29,6 +36,32 @@
           # Gradle 缓存跨构建复用，避免每次重下依赖
           - main:/root/.gradle:copy-on-write
       stages:
+        # Eclipse Temurin 镜像不含图形库，先补齐 Skiko 依赖的系统库。
+        # 这属于环境准备而非测试，失败原因和补测试代码完全不同，单独一个 stage 更好定位。
+        - name: setup-graphics-libs
+          script: |
+            set -e
+            # 有 apt 就用 apt，中系发行版没配源时退回 dnf/yum。
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+                libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+                fontconfig fonts-dejavu-core
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
+            else
+              echo "没有可用的包管理器，Skiko 所需的 libGL 装不上" >&2
+              exit 1
+            fi
+            # 装完先确认链接器能找到，省得后面测试里变成难读的 UnsatisfiedLinkError。
+            ldconfig
+            ls -l /usr/lib/x86_64-linux-gnu/libGL.so.1 || ldconfig -p | grep -m1 libGL
+
         - name: run-tests
           script: |
             chmod +x ./gradlew
@@ -66,6 +99,29 @@
           # PR 场景缓存只读，避免并发写入冲突
           - main:/root/.gradle:copy-on-write-read-only
       stages:
+        # 与 push 分支相同，见上方 setup-graphics-libs 的说明。
+        - name: setup-graphics-libs
+          script: |
+            set -e
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+                libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+                fontconfig fonts-dejavu-core
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
+            else
+              echo "没有可用的包管理器，Skiko 所需的 libGL 装不上" >&2
+              exit 1
+            fi
+            ldconfig
+            ls -l /usr/lib/x86_64-linux-gnu/libGL.so.1 || ldconfig -p | grep -m1 libGL
+
         - name: run-tests
           script: |
             chmod +x ./gradlew
