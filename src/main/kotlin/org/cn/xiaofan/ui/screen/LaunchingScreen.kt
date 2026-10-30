@@ -64,9 +64,10 @@ import org.cn.xiaofan.launch.LaunchState
  *
  * @param state 启动状态，由 [org.cn.xiaofan.launch.LaunchController] 提供
  * @param versionId 正在启动的版本，显示在标题里
- * @param onBack 返回主界面。启动中返回会**取消日志读取但不杀进程**
- *   （游戏已经在跑了，不该因为切了个画面就把人踢出来）
- * @param onStop 停止游戏进程
+ * @param onBack 回到主界面。**不会结束游戏** —— 会话被收到后台，
+ *   可以从侧栏齿轮按钮的抽屉里点回来。唯一例外是启动还没走完
+ *   （进程未起来）时，调用方会真正取消它
+ * @param onStop 停止游戏进程（这才是真的结束）
  */
 @Composable
 fun LaunchingScreen(
