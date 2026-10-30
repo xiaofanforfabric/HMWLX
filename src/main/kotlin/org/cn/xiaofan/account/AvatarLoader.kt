@@ -162,17 +162,20 @@ object AvatarLoader {
         }
 
         // ---- 第二步：后台刷新 ----
-        val png = fetchHeadPng(source.url)
-        if (png != null) {
-            // 刷新成功：写盘 + 通知界面替换。
-            // 写失败不影响显示，所以不看 write 的结果。
-            AvatarCache.write(profile, png)
-            val fresh = decodeHead(png)
-            if (fresh != null) {
-                withContext(Dispatchers.Main) { onRefreshed(fresh) }
-                return@withContext fresh
-            }
-        } else if (cached != null) {
+        // fetchHead 返回的是**位图**，不是编码后的字节。
+        // 这样「网络成功」与「编码成功」是两件独立的事：
+        // 编码失败不该被当成网络失败（理由见 fetchHead 的注释）。
+        val fresh = fetchHead(source.url)
+        if (fresh != null) {
+            // 刷新成功：显示新图，再尽力写盘。
+            // 写盘放在最后：encodeHead 可能失败，但那是缓存的问题，
+            // 不该影响用户看到刚下载的头像。
+            withContext(Dispatchers.Main) { onRefreshed(fresh) }
+            persist(profile, fresh)
+            return@withContext fresh
+        }
+
+        if (cached != null) {
             System.err.println("[Avatar] 刷新失败，使用缓存: ${profile.name}")
         }
 
@@ -181,12 +184,37 @@ object AvatarLoader {
     }
 
     /**
-     * 下载皮肤并裁出头部，返回**头部的 PNG 字节**。
+     * 把头像写进缓存。
      *
-     * <p>返回字节而不是 `ImageBitmap`，是为了让调用方既能直接显示、
-     * 也能原样写进缓存 —— 不用为了存盘再把 `ImageBitmap` 编码回 PNG。
+     * <p>编码和写盘都可能失败，两者都只打日志，不向上传播 ——
+     * 缓存是「锦上添花」，它坏了不该连累头像显示。
+     *
+     * <p>失败时打不同的日志：编码失败说明像素读取/重排有问题（通常是代码 bug），
+     * 写盘失败说明磁盘/权限有问题（通常是环境问题）。混淆两者会让排查走错方向。
      */
-    private fun fetchHeadPng(url: String): ByteArray? {
+    private suspend fun persist(profile: AccountProfile, head: ImageBitmap) {
+        val png = encodeHead(head)
+        if (png == null) {
+            System.err.println("[Avatar] 头像编码失败，本次不写缓存: ${profile.name}")
+            return
+        }
+        AvatarCache.write(profile, png)
+    }
+
+    /**
+     * 下载皮肤并裁出头部，返回**头部位图**。
+     *
+     * <p>返回位图而不是 PNG 字节，是为了让「拿到头像」和「编码成缓存格式」
+     * 彻底解耦。早期版本这里做 `encodeHead(cropHead(skin))` 并返回字节，
+     * 于是编码失败（`encodeHead` 内部用 `runCatching` 吞成 null）会被
+     * 上游误判成**网络失败**：
+     * - 日志打出「刷新失败，使用缓存」，而实际上网络完全正常
+     * - `AvatarCache.write` 永远拿不到字节，缓存永远写不进去，
+     *   用户每次启动都要重新下载皮肤，且每次都走这条看起来像故障的路径
+     *
+     * @return 裁好的头部；网络失败、没配皮肤、或解析失败时返回 null
+     */
+    private fun fetchHead(url: String): ImageBitmap? {
         var failure: String? = null
         return try {
             val skinBytes = if (PROFILE_ENDPOINT.matcher(url).matches()) {
@@ -202,7 +230,7 @@ object AvatarLoader {
             } ?: return failOrNot(failure)
 
             val skin = Image.makeFromEncoded(skinBytes).toComposeImageBitmap()
-            encodeHead(cropHead(skin))
+            cropHead(skin)
         } catch (t: Throwable) {
             // 头像加载失败不该影响主流程，只在控制台留一行线索
             System.err.println("[Avatar] 加载失败 $url: ${t.javaClass.simpleName}: ${t.message}")
@@ -225,8 +253,7 @@ object AvatarLoader {
     }
 
     /** 从网络加载皮肤并裁出头部。 */
-    private fun loadRemote(url: String): ImageBitmap? =
-        fetchHeadPng(url)?.let { decodeHead(it) }
+    private fun loadRemote(url: String): ImageBitmap? = fetchHead(url)
 
     /**
      * 把裁好的头部编码成 PNG。
@@ -280,7 +307,15 @@ object AvatarLoader {
             ?.bytes
     }.getOrNull()
 
-    /** 把 PNG 字节解码成头部图。 */
+    /**
+     * 把 PNG 字节解码成头部图。
+     *
+     * <p>**主流程不经过这里**：正常加载是「下载皮肤 → 裁头部 → 直接显示 / 编码存盘」，
+     * 不需要中途绕一趟 PNG。这个方法目前只服务于缓存往返测试 ——
+     * 用来验证 `encodeHead` 产出的字节能正确还原（尺寸、颜色通道、alpha）。
+     *
+     * <p>留着而不是删掉：它是那条往返链路的另一半，删了就没法测编码是否正确。
+     */
     private fun decodeHead(png: ByteArray): ImageBitmap? = runCatching {
         Image.makeFromEncoded(png).toComposeImageBitmap()
     }.getOrNull()
@@ -304,7 +339,7 @@ object AvatarLoader {
      * 有原因说明是真失败（429、超时、403），打一行日志再返回 null。
      * 两种情况对界面来说都是「没有头像」，区别只在控制台。
      */
-    private fun failOrNot(reason: String?): ByteArray? {
+    private fun failOrNot(reason: String?): ImageBitmap? {
         if (reason != null) System.err.println("[Avatar] $reason")
         return null
     }

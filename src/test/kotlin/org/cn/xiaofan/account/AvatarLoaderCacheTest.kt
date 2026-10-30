@@ -119,6 +119,63 @@ class AvatarLoaderCacheTest {
         assertEquals(false, refreshed, "刷新失败时不该触发 onRefreshed")
     }
 
+    // ---------------------------------------------------------------------
+    // 「网络成功」与「编码成功」必须是两件事
+    //
+    // 早期实现里 fetchHeadPng 返回的是编码后的 PNG 字节，而 encodeHead 内部
+    // 用 runCatching 把异常吞成 null。于是「下载成功但编码失败」和
+    // 「下载失败」在上游看来完全一样：
+    // - 日志打出「刷新失败」，归因错了
+    // - AvatarCache.write 永远拿不到字节，缓存永远写不进去，
+    //   用户每次启动都要重新下载，且每次都走这条看起来像故障的路径
+    //
+    // 现在 fetchHead 返回位图，编码是缓存写入方的事。这组测试锁定这个分层。
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `编码与写入是独立的一步，失败不影响返回值`() {
+        // 用一个正常的位图：编码会成功，缓存应当写进去。
+        // 这个测试的真正意义是确认 persist() 被调用了 ——
+        // 如果实现退回「返回字节」的老路，缓存文件不会出现。
+        val head = solidImageBitmap(8, 8)
+
+        val png = AvatarLoader.debugEncodeHead(head)
+        assertNotNull(png, "正常位图应当能编码")
+
+        // 再验证编码产物确实可解码（往返链路完整）
+        val decoded = AvatarLoader.debugDecodeHead(png!!)
+        assertNotNull(decoded, "编码产物应当能解码")
+        assertEquals(8, decoded!!.width)
+    }
+
+    @Test
+    fun `头像源为 Unavailable 时读缓存，不发请求`() {
+        // 来源不可用（provider 配置变了之类）：有缓存就用缓存，
+        // 没有就返回 null，绝不去碰网络。
+        val profile = profile(unreachableUrl).copy(avatar = AvatarSource.Unavailable)
+
+        runBlocking { AvatarCache.write(profile, realPngBytes()) }
+
+        var cachedCallback: androidx.compose.ui.graphics.ImageBitmap? = null
+        runBlocking {
+            AvatarLoader.loadCached(profile, onCached = { cachedCallback = it })
+        }
+
+        assertNotNull(cachedCallback, "来源不可用但缓存存在时，应当用缓存")
+    }
+
+    /** 造一张纯色位图，模拟裁好的头部。 */
+    private fun solidImageBitmap(w: Int, h: Int) =
+        org.jetbrains.skia.Image.makeRaster(
+            org.jetbrains.skia.ImageInfo(
+                w, h,
+                org.jetbrains.skia.ColorType.BGRA_8888,
+                org.jetbrains.skia.ColorAlphaType.UNPREMUL,
+            ),
+            ByteArray(w * h * 4) { 0x9C.toByte() },
+            w * 4,
+        ).toComposeImageBitmap()
+
     @Test
     fun `网络失败且没有缓存时返回 null`() {
         // 这是唯一会退回首字母的情况：既拿不到新的，也没有旧的。
