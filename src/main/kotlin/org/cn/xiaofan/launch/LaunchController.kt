@@ -329,8 +329,34 @@ class LaunchController(private val scope: CoroutineScope) {
      * **节流**：下载时 `stepBy()` 每块都会调，可能有几千次。
      * 每次都更新 StateFlow 会让界面重组过于频繁。所以只在
      * 百分比变化超过 1% 或者每 200ms 时才推送一次。
+     *
+     * ## 并发安全（重要）
+     *
+     * `AssetDownloader` 用 `ParallelTaskService` **多线程**并发调
+     * `stepBy()`，而它拿到的是**同一个** listener 实例（见
+     * `LaunchProgressBridge` 的类注释）。
+     *
+     * 所以这里的 `current`/`total`/`lastEmitAt`/`lastPercent` 都是
+     * 被多线程共享的可变状态，不能直接读写：
+     *
+     * - `current += delta` 是非原子的读-改-写，并发下会**丢计数**，
+     *   表现为进度条数字偏小、百分比长期落后于实际。
+     * - `onStart()` 里 `current = 0` 会把另一路正在累加的计数**抹掉**。
+     * - `lastEmitAt`/`lastPercent` 的"读-判断-写"不是原子的，
+     *   多个线程同时判断为"该推送"就会重复 emit。
+     *
+     * 这些错误都**不会报错、不会崩溃**，只会让进度数字悄悄偏小 ——
+     * 正是最难发现的那类 bug。所以所有状态访问统一用
+     * [progressLock] 串行化。
+     *
+     * 用一把锁而不是 AtomicLong：这几个字段必须**作为一个整体**
+     * 一起被读（`emit` 要同时看 current 和 total 才算得出百分比），
+     * 分开的原子变量会让它们之间出现不一致的中间态。
      */
     private fun progressListener(): LaunchProgressListener {
+        // 所有可变状态都在锁内访问。
+        val progressLock = Any()
+
         var current = 0L
         var total = -1L
         var name = ""
@@ -338,9 +364,17 @@ class LaunchController(private val scope: CoroutineScope) {
         var lastEmitAt = 0L
         var lastPercent = -1
 
-        fun emit(force: Boolean = false) {
+        /**
+         * 按需推送一次快照。**调用方必须已持有 [progressLock]**。
+         *
+         * 这样设计是为了让"读状态 → 判断是否该推 → 更新节流字段 → 推送"
+         * 成为一个不可分割的整体。如果在这里自己加锁，会和外层重复加锁
+         * （Kotlin 的 synchronized 可重入，不会死锁，但语义更绕）。
+         */
+        fun emitLocked(force: Boolean) {
             val now = System.currentTimeMillis()
             val percent = if (total > 0) ((current * 100) / total).toInt() else -1
+
             val shouldEmit = force ||
                 percent != lastPercent ||
                 now - lastEmitAt > 200
@@ -356,34 +390,47 @@ class LaunchController(private val scope: CoroutineScope) {
 
         return object : LaunchProgressListener {
             override fun onStart(taskName: String, initialMax: Long, unitName: String?, unitSize: Long) {
-                name = taskName
-                total = initialMax
-                unit = unitName
-                current = 0
+                synchronized(progressLock) {
+                    name = taskName
+                    total = initialMax
+                    unit = unitName
+                    current = 0
+                    lastPercent = -1
+                    emitLocked(force = true)
+                }
+                // 日志在锁外写：它走 _state.update（本身就是线程安全的），
+                // 且不该拖长持锁时间。
                 appendLog("开始: ${translateTaskName(taskName)}")
-                emit(force = true)
             }
 
             override fun onStep(delta: Long) {
-                current += delta
-                emit()
+                synchronized(progressLock) {
+                    current += delta
+                    emitLocked(force = false)
+                }
             }
 
             override fun onAbsolute(value: Long) {
-                current = value
-                emit()
+                synchronized(progressLock) {
+                    current = value
+                    emitLocked(force = false)
+                }
             }
 
             override fun onMaxHint(max: Long) {
-                total = max
-                emit(force = true)
+                synchronized(progressLock) {
+                    total = max
+                    emitLocked(force = true)
+                }
             }
 
             override fun onFinish(taskName: String) {
+                synchronized(progressLock) {
+                    lastPercent = -1
+                    // 清掉进度条：下一个任务会重新 onStart。
+                    _state.update { it.copy(progress = null) }
+                }
                 appendLog("完成: ${translateTaskName(taskName)}")
-                // 清掉进度条：下一个任务会重新 onStart。
-                _state.update { it.copy(progress = null) }
-                lastPercent = -1
             }
         }
     }

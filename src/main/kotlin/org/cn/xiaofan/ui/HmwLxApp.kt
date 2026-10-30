@@ -189,19 +189,19 @@ fun HmwLxApp() {
         state = bootstrap()
     }
 
-    // 定期刷新后台会话状态，让齿轮角标与实际在跑的游戏数量一致。
+    // 定期清理已结束的会话。
     //
-    // 为什么需要轮询：进程退出是**异步**的，Compose 没法"订阅"一个
-    // 外部进程的死亡。会话的 processAlive 是在读日志的协程里改的，
-    // 而 StateFlow 只有在被 collect 时才触发重组 ——
-    // 为每个会话常驻一个 collect 协程代码更绕。
+    // 注意这里**只负责移除**，不负责刷新界面数值 ——
+    // 角标和抽屉读的是每个会话的 snapshot（mutableStateOf），
+    // 状态变化会自动触发重组。
     //
-    // 1 秒一次足够：这是"角标数字早晚对一下"的活跃度，不是硬实时。
-    // 空闲时（没有会话）循环不跑，零开销。
+    // 仍然需要这个循环，因为"会话该不该移除"这个判断必须有人做：
+    // 进程退出是外部事件，没有回调能通知我们。
+    // 空闲时循环里什么都不做，零开销。
     LaunchedEffect(Unit) {
         while (true) {
             delay(1000)
-            sessions.refresh()
+            if (sessions.sessions.isNotEmpty()) sessions.prune()
         }
     }
 
@@ -391,7 +391,9 @@ fun HmwLxApp() {
                                             BackgroundGamesButton(
                                                 count = sessions.aliveCount,
                                                 onClick = {
-                                                    sessions.refresh()
+                                                    // 打开前顺手清理一次，避免列表里
+                                                    // 留着已经退出的会话。
+                                                    sessions.prune()
                                                     showSessions = !showSessions
                                                 },
                                                 // 底部留 8dp：启动按钮高 72dp、齿轮 56dp，
@@ -400,15 +402,10 @@ fun HmwLxApp() {
                                                 overlay = {
                                                     if (showSessions) {
                                                         BackgroundGamesDrawer(
-                                                            entries = sessions.sessions.map { s ->
-                                                                val st = s.controller.state.value
-                                                                BackgroundGameEntry(
-                                                                    id = s.id,
-                                                                    versionId = s.versionId,
-                                                                    pid = st.pid,
-                                                                    running = st.processAlive,
-                                                                )
-                                                            },
+                                                            // entries() 读的是每个会话的
+                                                            // snapshot（可观察），所以抽屉
+                                                            // 开着时 PID 和存活灯会实时更新。
+                                                            entries = sessions.entries(),
                                                             onEnter = { entry ->
                                                                 sessions.sessions
                                                                     .firstOrNull { it.id == entry.id }
@@ -529,10 +526,66 @@ private class LaunchSession(
 
     val controller = LaunchController(scope)
 
+    /**
+     * 供界面观察的**精简快照**。
+     *
+     * ## 为什么需要它
+     *
+     * `controller.state` 是普通 `StateFlow`，只有被 `collectAsState`
+     * 的地方才会因为它的变化而重组。而主界面只 collect **当前显示**
+     * 那个会话 —— 后台会话推进阶段（PID 从 null 变成真实值、
+     * `processAlive` 由 false 变 true）不会引起任何重组。
+     *
+     * 后果：齿轮抽屉开着的时候，存活灯和 PID 会一直停在打开那一刻的
+     * 旧值，直到有别的重组把它"撞醒"。用户刚启动游戏就点开齿轮，
+     * 看到的是 `PID —` 和灰点，明明游戏已经在跑了。
+     *
+     * ## 做法
+     *
+     * 每个会话创建时启动一个 collect 协程，把关心的几个字段同步到
+     * Compose 的 `mutableStateOf`。这样抽屉和角标读的是**同一个
+     * 可观察源**，不依赖"碰巧有个别的重组"。
+     *
+     * 只同步这三个字段而不是整个 `LaunchState`：后台列表不需要日志
+     * 和进度，同步整个对象会让每次日志追加都触发重组，纯属浪费。
+     */
+    var snapshot by mutableStateOf(SessionSnapshot())
+        private set
+
+    private val watcher = scope.launch {
+        controller.state.collect { st ->
+            val next = SessionSnapshot(
+                pid = st.pid,
+                processAlive = st.processAlive,
+                finished = st.finished,
+                cancelled = st.cancelled,
+            )
+            // 只在真的变了才写，避免无意义的重组。
+            if (next != snapshot) snapshot = next
+        }
+    }
+
     init {
         controller.launch(versionId, account)
     }
+
+    /** 会话彻底结束时停掉观察协程，避免泄漏。 */
+    fun dispose() {
+        watcher.cancel()
+    }
 }
+
+/**
+ * 会话的界面可见状态。
+ *
+ * <p>单独一个类型而不是直接用 `LaunchState`：见 [LaunchSession.snapshot]。
+ */
+data class SessionSnapshot(
+    val pid: Long? = null,
+    val processAlive: Boolean = false,
+    val finished: Boolean = false,
+    val cancelled: Boolean = false,
+)
 
 /**
  * 后台游戏会话的集合。
@@ -581,32 +634,51 @@ private class SessionRegistry {
      * **正在跑的游戏**移掉（窗口加载后就 finished 了）。
      */
     fun prune() {
-        sessions.removeAll { s ->
-            val st = s.controller.state.value
+        val removed = sessions.filter { s ->
+            val snap = s.snapshot
             !BackgroundSessionPolicy.shouldKeep(
-                finished = st.finished,
-                processAlive = st.processAlive,
-                cancelled = st.cancelled,
+                finished = snap.finished,
+                processAlive = snap.processAlive,
+                cancelled = snap.cancelled,
             )
         }
+        if (removed.isEmpty()) return
+
+        sessions.removeAll(removed)
+        // 停掉每个被移除会话的观察协程，否则它会一直 collect 一个
+        // 已经没人要的 StateFlow，白占一个协程和一份内存。
+        removed.forEach { it.dispose() }
     }
 
-    /** 真正在跑的游戏数量。Compose 状态，供角标读取。 */
-    var aliveCount by mutableStateOf(0)
-        private set
+    /**
+     * 真正在跑的游戏数量，供齿轮角标读取。
+     *
+     * <p>这是个**派生状态**：读 `sessions` 里每个会话的 `snapshot`，
+     * 而 snapshot 是 `mutableStateOf` —— 所以任何会话的
+     * `processAlive` 变化都会让读到这里的 Composable 重组。
+     *
+     * <p>以前这里是个手动的 `mutableStateOf` + 每秒轮询，
+     * 只在**数量**变化时才写值。那导致 PID 变化不触发重组，
+     * 抽屉里的 `PID —` 会一直显示旧值。现在改成直接派生，
+     * 轮询整个删掉了。
+     */
+    val aliveCount: Int
+        get() = sessions.count { it.snapshot.processAlive }
 
     /**
-     * 刷新派生状态。由界面的轮询循环每秒调一次。
+     * 抽屉要显示的条目。
      *
-     * <p>为什么是轮询而不是订阅：进程死亡发生在外部进程里，
-     * 我们只能通过会话的 StateFlow 感知，而 StateFlow 只有在被
-     * collect 时才触发重组。为每个会话常驻一个 collect 协程代码更绕，
-     * 一秒轮询一次的成本可以忽略。
+     * <p>同样读 snapshot 而不是 `controller.state.value` ——
+     * 后者不是可观察的，抽屉开着时不会随会话状态更新。
      */
-    fun refresh() {
-        prune()
-        val count = sessions.count { it.controller.state.value.processAlive }
-        if (count != aliveCount) aliveCount = count
+    fun entries(): List<BackgroundGameEntry> = sessions.map { s ->
+        val snap = s.snapshot
+        BackgroundGameEntry(
+            id = s.id,
+            versionId = s.versionId,
+            pid = snap.pid,
+            running = snap.processAlive,
+        )
     }
 }
 
