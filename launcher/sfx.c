@@ -63,6 +63,7 @@ typedef struct {
     uint64_t packedSize;
     uint64_t origSize;
     unsigned char props[LZMA_PROPS_SIZE];
+    unsigned short mode;  /* 权限位：0755 可执行 / 0644 普通。Windows 忽略 */
     char name[128];       /* 相对路径（正斜杠） */
 } SFXEntry;
 
@@ -501,10 +502,11 @@ static int load_index(SFXIndex *idx)
     unsigned char *end = raw + indexSize;
     for (uint32_t i = 0; i < count; i++) {
         SFXEntry *e = &idx->entries[i];
-        if (p + 8 + 8 + 8 + LZMA_PROPS_SIZE + 1 > end) goto bad;
+        if (p + 8 + 8 + 8 + 2 + LZMA_PROPS_SIZE + 1 > end) goto bad;
         memcpy(&e->offset, p, 8); p += 8;
         memcpy(&e->packedSize, p, 8); p += 8;
         memcpy(&e->origSize, p, 8); p += 8;
+        memcpy(&e->mode, p, 2); p += 2;
         memcpy(e->props, p, LZMA_PROPS_SIZE); p += LZMA_PROPS_SIZE;
         unsigned nameLen = *p++;
         if (nameLen >= sizeof(e->name) || p + nameLen > end) goto bad;
@@ -633,6 +635,25 @@ static int write_file(const char *path, const unsigned char *data, uint64_t size
 #endif
 }
 
+/*
+ * 还原文件权限位。
+ *
+ * 自解压包里的 runtime/bin/java 之类必须保留 x 位，否则解压出来是
+ * 644，execv 直接 EACCES（表现为「启动 JVM 返回 8」）。
+ * Windows 没有 POSIX 权限概念，直接跳过。
+ */
+static void set_mode(const char *path, unsigned short mode)
+{
+#ifndef _WIN32
+    if (mode != 0) {
+        chmod(path, (mode_t)mode);
+    }
+#else
+    (void)path;
+    (void)mode;
+#endif
+}
+
 /* 把相对路径（正斜杠）转成当前平台分隔符并建父目录 */
 static int prepare_target(const char *root, const char *rel, char *out, size_t cap)
 {
@@ -708,6 +729,7 @@ static int extract_all(const SFXIndex *idx, const char *root)
                 logmsg("写文件失败: %s\n", e->name);
                 return -3;
             }
+            set_mode(target, e->mode);
             progress_tick(++done);
             continue;
         }
@@ -724,6 +746,7 @@ static int extract_all(const SFXIndex *idx, const char *root)
             logmsg("写文件失败: %s\n", e->name);
             return -3;
         }
+        set_mode(target, e->mode);
         progress_tick(++done);
     }
     return 0;
@@ -1069,14 +1092,22 @@ static int launch_jvm(const char *root, int argc, char **argv)
     pid_t pid = fork();
     if (pid < 0) { free(args); show_error("fork 失败。"); return 6; }
     if (pid == 0) {
-        if (chdir(root) != 0) _exit(7);
+        if (chdir(root) != 0) {
+            logmsg("子进程 chdir 失败: %s (%s)\n", root, strerror(errno));
+            _exit(7);
+        }
         execv(javaPath, args);
+        /* execv 只在失败时返回，这里一定要记下 errno，否则只能看到退出码 8 */
+        logmsg("子进程 execv 失败: %s (%s)\n", javaPath, strerror(errno));
         _exit(8);
     }
     int status = 0;
     waitpid(pid, &status, 0);
     free(args);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 9;
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return 9;
 #endif
 }
 

@@ -311,12 +311,11 @@ fi
 exit 0
 
 %files
-%attr(755,root,root) /opt/${PKG_NAME}/HMWLX
 %dir /opt/${PKG_NAME}
+%attr(755,root,root) /opt/${PKG_NAME}/HMWLX
+%attr(644,root,root) /opt/${PKG_NAME}/hmwlx.jar
 %dir /opt/${PKG_NAME}/runtime
-%dir /opt/${PKG_NAME}/app
 /opt/${PKG_NAME}/runtime/*
-/opt/${PKG_NAME}/app/*
 /usr/bin/${PKG_NAME}
 /usr/share/applications/${PKG_NAME}.desktop
 /usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png
@@ -371,19 +370,19 @@ if [[ "$DO_APPIMAGE" == "true" ]]; then
         cp -r "$SRC_DIR/." "$APPDIR/usr/bin/HMWLX/"
 
         # --- AppRun ---
-        # 必须用脚本而不是软链：需要先算出 AppDir 的**实际挂载路径**，
-        # 再把它作为参数传给程序。硬编码路径在 AppImage 下必然失败。
+        # 用脚本而不是软链：APPDIR 是 AppImage 运行时注入的环境变量，
+        # 指向临时挂载点（形如 /tmp/.mount_HMWLXxxxx），每次运行都不同，
+        # 无法写死。
+        #
+        # 现在是 C 启动器，它自己用 /proc/self/exe 定位程序目录，
+        # 不依赖 cwd，所以这里直接 exec 就行，不用 cd。
         cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 #
 # AppImage 入口。
 #
-# 关键：APPDIR 是 AppImage 运行时注入的环境变量，指向临时挂载点
-# （形如 /tmp/.mount_HMWLXxxxx）。不能写死路径 —— 每次运行挂载点都不同。
-#
-# 同时要把 cwd 切到程序目录：HMWLX 的启动脚本用 $(dirname $0) 解析
-# 自身位置找 runtime/，从别处调用也不会错，但 cwd 在这能让相对资源
-# 路径（背景图等）也正常。
+# APPDIR 由 AppImage 运行时注入，指向本次挂载点。启动器靠
+# /proc/self/exe 找同目录的 hmwlx.jar 和 runtime/，不受 cwd 影响。
 SELF="$APPDIR/usr/bin/HMWLX/HMWLX"
 
 if [ ! -x "$SELF" ]; then
@@ -391,7 +390,6 @@ if [ ! -x "$SELF" ]; then
     exit 1
 fi
 
-cd "$APPDIR/usr/bin/HMWLX" || exit 1
 exec "$SELF" "$@"
 APPRUN
         chmod 755 "$APPDIR/AppRun"

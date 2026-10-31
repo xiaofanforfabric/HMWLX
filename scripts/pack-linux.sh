@@ -1,44 +1,73 @@
 #!/usr/bin/env bash
 #
-# 把 build/quarkus-app 打成 Linux 便携版。
+# Linux 打包：目录版 + 单文件自解压版
 #
 # 产出：
-#   dist/HMWLX-linux-x64/              ← 目录形态，解压即用
-#   dist/HMWLX-linux-x64.tar.gz        ← 上面那个目录的压缩包
+#   dist/HMWLX-linux-x64/                    目录形态（DEB/RPM 安装包从这里取材）
+#   dist/HMWLX-<ver>-linux-x64.run           单文件自解压（对应 Windows 的 .exe）
+#   dist/HMWLX-linux-x64.tar.gz              目录的压缩包
 #
-# 用法：
-#   ./scripts/pack-linux.sh             正常打包
-#   ./scripts/pack-linux.sh --skip-jre  复用已有的精简 JRE（迭代调样式时省时间）
-#
-# ---------------------------------------------------------------------------
-# 为什么不能直接用 jpackage
-# ---------------------------------------------------------------------------
-#
-# jpackage 对 Quarkus 这种"jar 套 jar"的布局支持不好：
-# 它要求 --main-jar 指向一个普通可执行 jar，而 quarkus-run.jar 靠
-# Manifest 里的 Class-Path 去 lib/ 下找几百个依赖。jpackage 不会
-# 递归搬运这些相对路径引用，打出来的包一跑就是 NoClassDefFoundError。
-#
-# 所以这里手工组装目录结构，只借用 jlink 裁 JRE：
+# 目录结构（和 Windows 包完全一致）：
 #
 #   HMWLX-linux-x64/
-#   ├── HMWLX              ← 启动脚本
-#   ├── app/               ← 原样搬过来的 quarkus-app
-#   └── runtime/           ← jlink 裁出来的精简 JRE
+#   ├── HMWLX          原生启动器（C，zig 交叉编译）
+#   ├── hmwlx.jar      fat jar（含全部依赖）
+#   └── runtime/       jlink 裁出来的 JRE
 #
-# 这个结构就是"便携版"：解压后双击 HMWLX 即可，删目录即卸载。
-
+# 为什么放弃 quarkus-app 目录 + shell 脚本：
+#
+#   老方案把 build/quarkus-app 整个搬过来，启动时由一个 sh 脚本
+#   拼接 classpath，顺序还不能错（transformed-bytecode.jar 必须
+#   排第一，否则报 NoSuchMethodError）。
+#
+#   现在改用 fat jar：Manifest 里直接写 Main-Class，不需要拼
+#   classpath，也不再有「顺序错了就起不来」的坑。启动器换成 C，
+#   和 Windows 共用一套逻辑（launcher/sfx.c）。
+#
+# 为什么不用 jpackage：
+#
+#   jpackage 要求 --main-jar 是普通可执行 jar，不理解 Quarkus 的
+#   嵌套布局。而且它把 JRE 塞进 app image 的方式不透明，
+#   想控制体积和目录结构很难。手工组装反而简单可控。
+#
+# 用法：
+#   ./scripts/pack-linux.sh              完整打包
+#   ./scripts/pack-linux.sh --skip-jre   复用已裁好的 runtime（迭代样式时省时间）
+#   ./scripts/pack-linux.sh --dir-only   只出目录，不打单文件（给 formats 脚本用）
+#
 set -euo pipefail
 
 # 脚本在 scripts/ 下，项目根目录是它上一级
 cd "$(dirname "$(readlink -f "$0")")/.."
 
 APP_NAME="HMWLX"
-BUILD_DIR="build/quarkus-app"
+VERSION="${VERSION:-1.0.0}"
 DIST_DIR="dist"
 OUT_DIR="${DIST_DIR}/${APP_NAME}-linux-x64"
+RUN_OUT="${DIST_DIR}/${APP_NAME}-${VERSION}-linux-x64.run"
+TAR_OUT="${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz"
+
 SKIP_JRE=false
-[[ "${1:-}" == "--skip-jre" ]] && SKIP_JRE=true
+DIR_ONLY=false
+for arg in "$@"; do
+    case "$arg" in
+        --skip-jre) SKIP_JRE=true ;;
+        --dir-only) DIR_ONLY=true ;;
+    esac
+done
+
+# ---------------------------------------------------------------- 工具定位
+ZIG="${ZIG:-}"
+if [[ -z "$ZIG" ]]; then
+    if command -v zig >/dev/null 2>&1; then
+        ZIG="$(command -v zig)"
+    elif [[ -x /tmp/zig-linux-x86_64-0.13.0/zig ]]; then
+        ZIG=/tmp/zig-linux-x86_64-0.13.0/zig
+    else
+        echo "错误：找不到 zig。请设 ZIG=/path/to/zig" >&2
+        exit 1
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 找 JDK 25
@@ -50,9 +79,9 @@ find_jdk25() {
     local candidates=(
         "${HMYLX_JDK25:-}"
         /tmp/jdk25/jdk-25.0.5+8
-        /opt/idea-IU-262.8665.337/jbr
         "$HOME/.jdks/temurin-25"
         /usr/lib/jvm/java-25-openjdk-amd64
+        /opt/idea-IU-262.8665.337/jbr
     )
     local c
     for c in "${candidates[@]}"; do
@@ -63,46 +92,78 @@ find_jdk25() {
     return 1
 }
 
-JDK="$(find_jdk25)" || {
-    echo "❌ 找不到带 jlink 的 JDK 25" >&2
-    echo "   JBR 是裁剪版，没有 jlink。请安装完整 JDK 25 或设 HMYLX_JDK25。" >&2
-    exit 1
-}
-echo "JDK: $JDK ($("$JDK/bin/java" -version 2>&1 | head -1))"
-
-if [[ ! -d "$BUILD_DIR" ]]; then
-    echo "❌ 找不到 $BUILD_DIR，请先跑 ./scripts/build.sh" >&2
+# ---------------------------------------------------------------- 依赖检查
+FAT_JAR="build/libs/hmwlx-1.0-SNAPSHOT-all.jar"
+if [[ ! -f "$FAT_JAR" ]]; then
+    echo "错误：$FAT_JAR 不存在，请先跑 ./scripts/build.sh 或 ./gradlew fatJar" >&2
     exit 1
 fi
+echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
 
-# ---------------------------------------------------------------------------
-# 1. jlink 裁 JRE
+echo "==> zig: $ZIG ($("$ZIG" version))"
+
+mkdir -p "$DIST_DIR"
+
+# ---------------------------------------------------------------- 编译启动器
 #
-# 模块清单是手工列出来的，不是 jdeps 算的 —— jdeps 分析不穿 Quarkus 的
-# Class-Path 间接引用，算出来的结果会缺模块，运行期才炸。
+# 同一个 sfx.c 编两个平台：Windows 版是 PE，Linux 版是 ELF。
+# Linux 侧锁定 glibc 2.31，覆盖 Ubuntu 20.04 / Debian 11 及以后。
 #
-# 每个模块的必要性：
-#   java.base         必需
-#   java.desktop      Compose Desktop（AWT/Swing）+ Browser.kt 的 Desktop
-#   java.logging      Quarkus 的日志体系
-#   java.naming       JNDI，Quarkus 的配置/资源查找会用到
-#   java.xml          Compose 资源解析、Quarkus 的 XML 处理
-#   java.management   JMX，Quarkus 启动会探测
-#   java.instrument   字节码增强（Quarkus 的 transformed-bytecode）
-#   java.net.http     Java 11 HttpClient，认证流程用
-#   java.security.jgss  Kerberos，微软认证链路上可能出现
-#   jdk.crypto.ec     ECDSA/TLS，连微软和 Mojang 必须
-#   jdk.crypto.cryptoki PKCS#11，TLS provider 的备选
-#   jdk.unsupported   sun.misc.Unsafe —— 大量库（Netty/Jackson）依赖它
-#   jdk.zipfs         jar 文件系统，Quarkus 加载嵌套 jar 要用
-#   jdk.localedata    中文本地化。**不能省**，否则界面中文变方块
-# 注意：--strip-debug 去掉调试符号（省约 20M），
-#      --compress=zip-6 压缩（JDK 21+ 的语法，比旧版 compress=2 更省）。
-# ---------------------------------------------------------------------------
+echo "==> 编译 Linux 启动器"
+mkdir -p build/launcher
+"$ZIG" cc -target x86_64-linux-gnu.2.31 -O2 -s -Wall \
+    launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
+    -o build/launcher/HMWLX-linux
+echo "    $(du -h build/launcher/HMWLX-linux | cut -f1)"
+
+# ---------------------------------------------------------------- 组装目录
+echo "==> 组装目录 $OUT_DIR"
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+
+cp build/launcher/HMWLX-linux "$OUT_DIR/HMWLX"
+chmod 755 "$OUT_DIR/HMWLX"
+
+cp "$FAT_JAR" "$OUT_DIR/hmwlx.jar"
+
+# ---------------------------------------------------------------- 换 skiko
+#
+# fat jar 里的 skiko 原生库是构建机平台的（compose.desktop.currentOs）。
+# 在 Linux 上构建本来就对，但如果哪天在别的平台上构建 Linux 包，
+# 这一步能保证换回来。统一走同一个脚本，behavior 可预期。
+#
+echo "==> 确保 skiko 原生库是 Linux 版"
+./scripts/skiko-strip.sh "$OUT_DIR/hmwlx.jar" linux-x64
+
+# ---------------------------------------------------------------- 裁剪 JRE
+#
+# 模块清单是手工列的，不能用 jdeps 自动算 —— jdeps 分析不穿
+# Quarkus 的间接引用，算出来会缺模块，运行期才炸。
+#
+#   java.base          必需
+#   java.desktop       Compose Desktop（AWT/Swing）
+#   java.logging       Quarkus 日志
+#   java.naming        JNDI
+#   java.xml           资源解析
+#   java.management    JMX 探测
+#   java.instrument    字节码增强
+#   java.net.http      HttpClient（认证流程）
+#   java.security.jgss Kerberos（微软认证链路）
+#   jdk.crypto.ec      ECDSA/TLS
+#   jdk.crypto.cryptoki PKCS#11
+#   jdk.unsupported    sun.misc.Unsafe（Netty/Jackson 依赖）
+#   jdk.zipfs          jar 文件系统
+#   jdk.localedata     中文本地化，不能省，否则界面中文变方块
+#
 if [[ "$SKIP_JRE" == "true" && -d "$OUT_DIR/runtime" ]]; then
-    echo "⏭  复用已有 runtime（--skip-jre）"
+    echo "==> 复用已有 runtime（--skip-jre）"
 else
-    echo "→ jlink 裁剪 JRE…"
+    JDK="$(find_jdk25)" || {
+        echo "错误：找不到带 jlink 的 JDK 25" >&2
+        echo "  JBR 是裁剪版，没有 jlink。请安装完整 JDK 25 或设 HMYLX_JDK25。" >&2
+        exit 1
+    }
+    echo "==> jlink 裁剪 JRE（$JDK）"
     rm -rf "$OUT_DIR/runtime"
     "$JDK/bin/jlink" \
         --add-modules java.base,java.desktop,java.logging,java.naming,java.xml,java.management,java.instrument,java.net.http,java.security.jgss,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.unsupported,jdk.zipfs,jdk.localedata \
@@ -111,134 +172,58 @@ else
         --no-man-pages \
         --compress=zip-6 \
         --output "$OUT_DIR/runtime"
-    echo "   runtime 大小: $(du -sh "$OUT_DIR/runtime" | cut -f1)"
+    echo "    runtime: $(du -sh "$OUT_DIR/runtime" | cut -f1)"
 fi
 
-# ---------------------------------------------------------------------------
-# 2. 拷贝应用
+# ---------------------------------------------------------------- 权限
 #
-# 原样搬 quarkus-app：里面的 Manifest Class-Path 是相对路径
-# （lib/main/xxx.jar），整体搬过去相对关系不变，不用改任何配置。
-# ---------------------------------------------------------------------------
-echo "→ 拷贝应用…"
-rm -rf "$OUT_DIR/app"
-cp -r "$BUILD_DIR" "$OUT_DIR/app"
-
-# 统一权限（必须做，否则分发给别人后直接不可用）
+# Gradle 缓存里的文件是 0600（只有属主可读）。自带机器上跑没事，
+# 但分发出去后用户读不了，启动即 ClassNotFoundException。
+# a+rX 里的 X 只对目录和已有执行位的文件加 x，不会把 jar 误标成可执行。
 #
-# Gradle 从缓存里拷出来的 jar 是 0600（只有属主可读）。在自己机器上跑没事，
-# 但打包发出去后：
-#   - DEB：非 root 用户读不了 jar，启动即 ClassNotFoundException
-#   - AppImage：appimagetool 直接拒绝构建，报 "has mode 0600,
-#     but it must be readable for all users"
-#
-# 用 a+rX 而不是 a+r：X 只对**目录**和**已有执行位的文件**加 x，
-# 不会把 jar 误标成可执行。
-chmod -R a+rX "$OUT_DIR/app"
-chmod 755 "$OUT_DIR/HMWLX" 2>/dev/null || true
+chmod -R a+rX "$OUT_DIR"
 
-# ---------------------------------------------------------------------------
-# 3. 生成启动脚本
-# ---------------------------------------------------------------------------
-echo "→ 生成启动脚本…"
-cat > "$OUT_DIR/HMWLX" <<'LAUNCHER'
-#!/bin/sh
-#
-# HMWLX 启动脚本。
-#
-# 用脚本而不是 jpackage 生成的二进制启动器：Quarkus 的类加载器需要
-# 正确的 classpath 顺序（transformed-bytecode.jar 必须优先），
-# 一个小脚本比调试 jpackage 的启动器配置直接得多。
+# ---------------------------------------------------------------- 校验
+for f in HMWLX hmwlx.jar runtime/bin/java runtime/lib/modules; do
+    if [[ ! -e "$OUT_DIR/$f" ]]; then
+        echo "错误：缺少 $f" >&2
+        exit 1
+    fi
+done
+echo "==> 目录体积: $(du -sh "$OUT_DIR" | cut -f1)"
 
-set -e
-
-# 解析自身所在目录，允许从任意 cwd 启动（比如桌面快捷方式）。
-SELF_DIR=$(cd "$(dirname "$0")" && pwd)
-
-# 便携版原则：所有路径都相对程序目录，绝不写用户主目录。
-# 这样解压到 U 盘也能用，删目录就干净卸载。
-export JAVA_HOME="$SELF_DIR/runtime"
-JAVA="$SELF_DIR/runtime/bin/java"
-
-if [ ! -x "$JAVA" ]; then
-    echo "错误：找不到运行时 $JAVA" >&2
-    echo "请确认 runtime/ 目录完整（可能是解压不完整）" >&2
-    exit 1
+if [[ "$DIR_ONLY" == "true" ]]; then
+    echo ""
+    echo "=== 完成（仅目录）==="
+    echo "目录: $OUT_DIR"
+    exit 0
 fi
 
-# Skiko 的原生库在 app/lib/main 里被打进 jar，运行时会解压到临时目录。
-# 显式指定 java.io.tmpdir 到一个可写位置，避免某些受限环境下无家可归。
-#
-# 这些参数与 build.gradle 里 run 任务的配置保持一致，缺一个就会出问题：
-#   --add-opens java.base/java.lang   Quarkus 的 thread-local-reset
-#                                     在 JDK 24+ 上不补就会 IllegalAccessError
-#   --add-opens java.base/java.nio    Netty / Jackson 的堆外访问
-#   --add-opens java.base/jdk.internal.misc
-#                                     sun.misc.Unsafe 的替代路径
-#   --enable-native-access=ALL-UNNAMED Skiko 通过 JNI 调 Skia
-#   -Dskiko.renderApi=SOFTWARE        Linux 上没有可靠 GPU 时走软件渲染，
-#                                     不设会在部分显卡驱动上直接崩
-# ---------------------------------------------------------------------------
-# classpath 顺序（关键，改错就起不来）
-# ---------------------------------------------------------------------------
-#
-# 绝对不能写成 `-jar quarkus-run.jar`。原因：
-#
-#   quarkus-run.jar 的 Main-Class 是 QuarkusEntryPoint，它会去找
-#   `@QuarkusMain` 标注的类 —— 而 headlessmc 的 HeadlessMcMain 标了它，
-#   于是启动的是 headlessmc 的交互式命令行，不是我们的 GUI。
-#   表现为程序卡在一个 `> ` 提示符上等输入。
-#
-# 所以必须显式指定主类 org.cn.xiaofan.MainKt，并自己拼 classpath。
-#
-# 顺序规则（与 build.gradle 的 run/test 任务完全一致）：
-#   1. transformed-bytecode.jar  Quarkus 改写过的类（给 bean 补无参构造器）
-#   2. generated-bytecode.jar    ApplicationImpl 与 _Bean/_ClientProxy
-#   3. lib/boot/*.jar            引导器（DisabledInitialContextManager 等）
-#   4. lib/main/*.jar            业务依赖
-#   5. app/*.jar                 我们自己的类
-#
-# 1、2 必须最前：同名类要解析到增强版。顺序错了会报
-#   NoSuchMethodError: DefaultConfigFileProvider: <init>() not found
-#   （因为拿到的是未增强的原版）
-#
-# app/*.jar 放最后：它里面有被 Quarkus 改写坏的 MainKt（注入了重复的
-# main 方法），前面有正确版本时就不会被加载到。
-build_cp() {
-    local d="$SELF_DIR"
-    printf '%s' "$d/app/quarkus/transformed-bytecode.jar:$d/app/quarkus/generated-bytecode.jar"
-    local f
-    for f in "$d"/app/lib/boot/*.jar; do printf ':%s' "$f"; done
-    for f in "$d"/app/lib/main/*.jar; do printf ':%s' "$f"; done
-    for f in "$d"/app/app/*.jar; do printf ':%s' "$f"; done
-}
+# ---------------------------------------------------------------- 打 tar.gz
+echo "==> 打包 tar.gz"
+rm -f "$TAR_OUT"
+tar -C "$DIST_DIR" -czf "$TAR_OUT" "${APP_NAME}-linux-x64"
 
-CP=$(build_cp)
-
-exec "$JAVA" \
-    -XX:+UseSerialGC \
-    -Dfile.encoding=UTF-8 \
-    -Djava.awt.headless=false \
-    -Dskiko.renderApi=SOFTWARE \
-    --add-opens java.base/java.lang=ALL-UNNAMED \
-    --add-opens java.base/java.nio=ALL-UNNAMED \
-    --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-    --enable-native-access=ALL-UNNAMED \
-    -cp "$CP" \
-    org.cn.xiaofan.MainKt \
-    "$@"
-LAUNCHER
-chmod +x "$OUT_DIR/HMWLX"
-
-# ---------------------------------------------------------------------------
-# 4. 打 tar.gz
-# ---------------------------------------------------------------------------
-echo "→ 打包 tar.gz…"
-tar -C "$DIST_DIR" -czf "${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz" "${APP_NAME}-linux-x64"
+# ---------------------------------------------------------------- 单文件
+#
+# 和 Windows 的 .exe 是同一套机制：LZMA 压缩载荷追加到 ELF 末尾，
+# 首次运行解压到 ~/.cache/HMWLX/app/<指纹>/，之后复用。
+#
+echo "==> 制作单文件自解压版（LZMA，较慢）"
+python3 scripts/make-sfx.py \
+    --stub build/launcher/HMWLX-linux \
+    --payload-dir "$OUT_DIR" \
+    --output "$RUN_OUT"
+chmod 755 "$RUN_OUT"
 
 echo ""
-echo "=== 完成 ==="
-echo "目录 : $OUT_DIR  ($(du -sh "$OUT_DIR" | cut -f1))"
-echo "压缩 : ${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz  ($(du -sh "${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz" | cut -f1))"
+echo "=========================================="
+echo " 打包完成"
+echo "=========================================="
+echo " 目录   : $OUT_DIR  ($(du -sh "$OUT_DIR" | cut -f1))"
+echo " tar.gz : $TAR_OUT  ($(du -h "$TAR_OUT" | cut -f1))"
+echo " 单文件 : $RUN_OUT  ($(du -h "$RUN_OUT" | cut -f1))"
 echo ""
-echo "试用 : $OUT_DIR/HMWLX"
+echo " 单文件用法:"
+echo "   chmod +x $RUN_OUT && ./$RUN_OUT"
+echo "   首次运行会解压到 ~/.cache/HMWLX/app/，之后秒开。"

@@ -17,7 +17,10 @@ HMWLX 自解压包构建器
     [TRAILER: "HMWLXSFX" + indexOffset(u64) + indexSize(u64) + count(u32)]
 
 索引区每条：
-    offset(u64) packedSize(u64) origSize(u64) props[5] nameLen(u8) name[nameLen]
+    offset(u64) packedSize(u64) origSize(u64) mode(u16) props[5] nameLen(u8) name[nameLen]
+
+mode 是可执行位（0755 或 0644）。Linux/macOS 解压时按它还原，
+否则 runtime/bin/java 出来是 644，execv 会 EACCES。Windows 忽略。
 
 全部小端，与 launcher/sfx.c 的解析代码一一对应。
 """
@@ -94,7 +97,7 @@ def build(stub_path, payload_dir, output_path, level=9):
     for i, (rel, full, is_dir) in enumerate(items):
         if is_dir:
             # 目录条目：不占数据，只在索引里标记（名字以 / 结尾）
-            blobs.append((b"", 0, 0, rel))
+            blobs.append((b"", 0, 0, rel, 0o755))
             continue
 
         with open(full, "rb") as f:
@@ -107,7 +110,11 @@ def build(stub_path, payload_dir, output_path, level=9):
 
         total_orig += len(data)
         total_packed += len(compressed)
-        blobs.append((compressed, len(compressed), len(data), rel))
+        # 记可执行位：Linux/macOS 上 runtime/bin/java 之类必须保留 x，
+        # 否则解压出来是 644，execv 直接 EACCES。Windows 忽略此字段。
+        st = os.stat(full)
+        mode = 0o755 if (st.st_mode & 0o111) else 0o644
+        blobs.append((compressed, len(compressed), len(data), rel, mode))
 
         if (i + 1) % 500 == 0:
             print(f"  已压缩 {i + 1}/{len(items)} …", end="\r")
@@ -123,7 +130,7 @@ def build(stub_path, payload_dir, output_path, level=9):
 
     # 第一遍：按顺序写数据块，记录每块的真实偏移
     entries = []
-    for compressed, packed_len, orig_len, rel in blobs:
+    for compressed, packed_len, orig_len, rel, mode in blobs:
         offset = len(body)
         if compressed:
             body.extend(compressed)
@@ -131,12 +138,12 @@ def build(stub_path, payload_dir, output_path, level=9):
         if len(name_bytes) > 127:
             print(f"错误：路径过长（{len(name_bytes)} 字节）：{rel}", file=sys.stderr)
             return 1
-        entries.append((offset, packed_len, orig_len, PROPS, name_bytes))
+        entries.append((offset, packed_len, orig_len, PROPS, mode, name_bytes))
 
     # 第二遍：写索引区（定长字段 + 变长名字，C 端顺序读取）
     index_offset = len(body)
-    for offset, packed_len, orig_len, props, name_bytes in entries:
-        body.extend(struct.pack("<QQQ", offset, packed_len, orig_len))
+    for offset, packed_len, orig_len, props, mode, name_bytes in entries:
+        body.extend(struct.pack("<QQQH", offset, packed_len, orig_len, mode))
         body.extend(props)
         body.append(len(name_bytes))
         body.extend(name_bytes)
