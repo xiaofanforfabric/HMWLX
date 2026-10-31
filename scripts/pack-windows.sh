@@ -42,24 +42,43 @@ JRE_CACHE="dist/cache/temurin25-win-jre.zip"
 WANT_ZIP=false
 [[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
 
-# ---------------------------------------------------------------- 定位 zig
+# ---------------------------------------------------------------- 选择编译器
 #
-# 优先用 install-zig.sh --path 的统一逻辑：它会依次看
-# $HMWLX_ZIG_DIR、$PWD/.tooling/zig、/tmp、$HOME 等位置，
-# 把 CI 和本地两种环境都盖住，不用在这里重复维护一份。
+# 优先 mingw-w64，zig 只作后备。
 #
-ZIG="${ZIG:-}"
-if [[ -z "$ZIG" ]]; then
-  if command -v zig >/dev/null 2>&1; then
-    ZIG="$(command -v zig)"
-  elif _zd="$(bash scripts/install-zig.sh --quiet)" && [[ -x "$_zd/zig" ]]; then
-    ZIG="$_zd/zig"
-  else
-    # 同 pack-linux.sh：别把 install-zig.sh 的失败诊断丢进 /dev/null。
-    echo "错误：找不到 zig。请设置 ZIG=/path/to/zig" >&2
-    echo "  或跑 ./scripts/install-zig.sh 自动装（会打印失败原因）" >&2
-    exit 1
-  fi
+# 为什么不再默认用 zig：
+#   zig 的发行包解出来是 16000+ 个小文件。CI 环境（CNB）的存储对
+#   「tar 展开上万个文件」会报 Function not implemented (ENOSYS)，
+#   而 apt 装包（dpkg 路径）却完全正常 —— 试过六轮修补 tar 那一侧
+#   （换目录、换源、稀疏解压、分段写、docker build）全部无效。
+#
+#   sfx.c 只是普通 C（标准头 + windows.h + unistd.h + LZMA SDK），
+#   没有任何 zig 语言特性，用 mingw-w64 编出来的 PE 一样能用。
+#   apt 装 mingw-w64 走 dpkg，绕开了 tar 那个坑。
+#
+# 用 zig 的条件：显式设了 ZIG，或本地没装 mingw 但 .tooling/zig 在。
+#
+CROSS_CC=""
+if [[ -n "${ZIG:-}" ]] && [[ -x "${ZIG}" || -n "$(command -v "$ZIG" 2>/dev/null)" ]]; then
+  CROSS_CC="$ZIG"
+  COMPILER_KIND=zig
+elif command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+  CROSS_CC="x86_64-w64-mingw32-gcc"
+  COMPILER_KIND=mingw
+elif [[ -n "${CC_WINDOWS:-}" ]] && command -v "$CC_WINDOWS" >/dev/null 2>&1; then
+  CROSS_CC="$CC_WINDOWS"
+  COMPILER_KIND=mingw
+elif _zd="$(bash scripts/install-zig.sh --quiet 2>/dev/null)" && [[ -x "$_zd/zig" ]]; then
+  CROSS_CC="$_zd/zig"
+  COMPILER_KIND=zig
+else
+  cat >&2 <<'EOF'
+错误：找不到能交叉编译 Windows 产物的编译器
+  首选：apt-get install -y mingw-w64
+        （提供 x86_64-w64-mingw32-gcc）
+  备选：设置 ZIG=/path/to/zig
+EOF
+  exit 1
 fi
 
 # ---------------------------------------------------------------- 依赖检查
@@ -69,22 +88,42 @@ if [[ ! -f "$FAT_JAR" ]]; then
 fi
 echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
-echo "==> zig: $ZIG ($("$ZIG" version))"
+echo "==> 编译器($COMPILER_KIND): $CROSS_CC"
 
 mkdir -p dist/cache
 
 # ---------------------------------------------------------------- 编译 stub
 #
-# -Wl,--subsystem,windows 让产物是 GUI 子系统，双击不弹黑框。
-# zig 不认 gcc 的 -mwindows（只会警告 argument unused）。
+# Windows GUI 子系统：双击不弹黑框。两种编译器的写法不同：
+#   mingw: -mwindows（同时决定子系统 + 入口点）
+#   zig:   zig 不认 -mwindows，必须显式给链接器参数
+#
+# -s 去符号表，产物从 ~300KB 降到 ~60KB。
 #
 echo "==> 编译自解压启动器"
 mkdir -p build/launcher
-"$ZIG" cc -target x86_64-windows-gnu -O2 -s -Wall \
-  -Wl,--subsystem,windows -Wl,-e,mainCRTStartup \
-  launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
-  -lcomctl32 \
-  -o build/launcher/HMWLX-sfx.exe
+
+SRCS=(launcher/sfx.c launcher/third_party/lzma/LzmaDec.c)
+
+if [[ "$COMPILER_KIND" == "zig" ]]; then
+  "$CROSS_CC" cc -target x86_64-windows-gnu -O2 -s -Wall \
+    -Wl,--subsystem,windows -Wl,-e,mainCRTStartup \
+    "${SRCS[@]}" \
+    -lcomctl32 \
+    -o build/launcher/HMWLX-sfx.exe
+else
+  # mingw-w64
+  #
+  # -municode 不需要：我们的入口是普通 main()，mingw 默认就能处理。
+  # -static-libgcc：别把 libgcc 的 DLL 依赖带进产物，
+  #   否则用户机器上少个 DLL 就启动不了。
+  "$CROSS_CC" -O2 -s -Wall -Wno-format-truncation -mwindows \
+    -static-libgcc \
+    "${SRCS[@]}" \
+    -lcomctl32 \
+    -o build/launcher/HMWLX-sfx.exe
+fi
+
 STUB="build/launcher/HMWLX-sfx.exe"
 STUB_SIZE=$(stat -c%s "$STUB")
 echo "    stub: $((STUB_SIZE / 1024)) KB"

@@ -62,27 +62,43 @@ for arg in "$@"; do
     esac
 done
 
-# ---------------------------------------------------------------- 定位 zig
+# ---------------------------------------------------------------- 选择编译器
 #
-# 优先用 install-zig.sh --path 的统一逻辑：它会依次看
-# $HMWLX_ZIG_DIR、$PWD/.tooling/zig、/tmp、$HOME 等位置，
-# 把 CI 和本地两种环境都盖住，不用在这里重复维护一份。
+# 优先本机 gcc，zig 只作后备（且仅当本机实在没有 gcc 时才用）。
 #
-ZIG="${ZIG:-}"
-if [[ -z "$ZIG" ]]; then
-    if command -v zig >/dev/null 2>&1; then
-        ZIG="$(command -v zig)"
-    elif _zd="$(bash scripts/install-zig.sh --quiet)" && [[ -x "$_zd/zig" ]]; then
-        ZIG="$_zd/zig"
-    else
-        # 这里不要再把 install-zig.sh 的输出丢进 /dev/null：
-        # 自动安装失败时，真正的失败原因（镜像下不来、解压 ENOSYS）
-        # 全在它那份输出里。--quiet 只让它在成功时输出最后一行的路径，
-        # 失败时诊断信息照常走 stderr。
-        echo "错误：找不到 zig。请设 ZIG=/path/to/zig" >&2
-        echo "  或跑 ./scripts/install-zig.sh 自动装（会打印失败原因）" >&2
-        exit 1
-    fi
+# 为什么不默认用 zig：
+#   zig 发行包解出来是 16000+ 个小文件。CI（CNB）的存储对「tar 展开
+#   上万个文件」报 Function not implemented (ENOSYS)，而 apt 装包
+#   （dpkg 路径）完全正常 —— 换目录、换源、稀疏解压、分段写、
+#   docker build 全都试过，无效。
+#
+#   sfx.c 只是普通 C，gcc 编出来一模一样。
+#
+# glibc 版本：本机 gcc 会绑当前系统的 glibc（容器里是 Ubuntu resolute，
+# 比较高）。如果要在 Ubuntu 20.04 / Debian 11 上跑，
+# 需要显式用 zig 锁 2.31（设 ZIG=/path/to/zig）；否则走 gcc。
+#
+# 本地开发大多数人不需要那么老的兼容性，所以默认 gcc。
+#
+CROSS_CC=""
+COMPILER_KIND=""
+if [[ -n "${ZIG:-}" ]] && [[ -x "${ZIG}" || -n "$(command -v "$ZIG" 2>/dev/null)" ]]; then
+    CROSS_CC="$ZIG"
+    COMPILER_KIND=zig
+elif command -v gcc >/dev/null 2>&1; then
+    CROSS_CC=gcc
+    COMPILER_KIND=gcc
+elif command -v cc >/dev/null 2>&1; then
+    CROSS_CC=cc
+    COMPILER_KIND=gcc
+elif _zd="$(bash scripts/install-zig.sh --quiet 2>/dev/null)" && [[ -x "$_zd/zig" ]]; then
+    CROSS_CC="$_zd/zig"
+    COMPILER_KIND=zig
+else
+    echo "错误：找不到 gcc 或 zig" >&2
+    echo "  首选：apt-get install -y gcc" >&2
+    echo "  备选：设 ZIG=/path/to/zig（可锁定 glibc 2.31）" >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -107,7 +123,24 @@ find_jdk25() {
     for c in "${candidates[@]}"; do
         # jlink 是判定"能否打运行时镜像"的关键，只有完整 JDK 才有。
         # JBR（JetBrains Runtime）是裁过的，没有 jlink，要跳过。
-        [[ -n "$c" && -x "$c/bin/jlink" ]] && { echo "$c"; return 0; }
+        [[ -n "$c" && -x "$c/bin/jlink" ]] || continue
+
+        # 还要校版本号：$JAVA_HOME 经常指向系统自带的 17，
+        # 只检查 jlink 存在的话会误选它，然后在
+        #   --compress=zip-6（JDK 21+ 语法）
+        # 或 headlessmc 的 class file 69 上炸掉。
+        # 版本号从 release 文件读，比跑 java -version 快且不受环境影响。
+        local major=""
+        if [[ -f "$c/release" ]]; then
+            major="$(sed -n 's/^JAVA_VERSION="\([0-9]*\).*/\1/p' "$c/release" | head -1)"
+        fi
+        if [[ -z "$major" ]]; then
+            major="$("$c/bin/java" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -1)"
+        fi
+        if [[ "${major:-0}" -ge 25 ]]; then
+            echo "$c"
+            return 0
+        fi
     done
     return 1
 }
@@ -119,20 +152,37 @@ if [[ ! -f "$FAT_JAR" ]]; then
 fi
 echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
-echo "==> zig: $ZIG ($("$ZIG" version))"
+echo "==> 编译器($COMPILER_KIND): $CROSS_CC"
 
 mkdir -p "$DIST_DIR"
 
 # ---------------------------------------------------------------- 编译启动器
 #
 # 同一个 sfx.c 编两个平台：Windows 版是 PE，Linux 版是 ELF。
-# Linux 侧锁定 glibc 2.31，覆盖 Ubuntu 20.04 / Debian 11 及以后。
+#
+# zig 会把 glibc 锁到目标版本（2.31，覆盖 Ubuntu 20.04 / Debian 11）；
+# gcc 则绑当前系统的 glibc。两者编出的 ELF 都能用，只是可运行范围不同。
 #
 echo "==> 编译 Linux 启动器"
 mkdir -p build/launcher
-"$ZIG" cc -target x86_64-linux-gnu.2.31 -O2 -s -Wall \
-    launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
-    -o build/launcher/HMWLX-linux
+
+SRCS=(launcher/sfx.c launcher/third_party/lzma/LzmaDec.c)
+
+if [[ "$COMPILER_KIND" == "zig" ]]; then
+    "$CROSS_CC" cc -target x86_64-linux-gnu.2.31 -O2 -s -Wall \
+        "${SRCS[@]}" -o build/launcher/HMWLX-linux
+else
+    # -s 去符号表（和 zig 的 -s 同效果，产物从 ~50KB 降到 ~35KB）
+    # -static-libgcc 避免额外依赖 libgcc_s.so
+    #
+    # -Wno-format-truncation：sfx.c 里 path_join 用 "%s/%s" 拼路径，
+    #   gcc 12+ 会逐处警告"可能截断"。这些路径本来就以 2048 为上限、
+    #   超了也会被 snprintf 截断而不是溢出，所以静音掉，
+    #   免得真实警告被淹没。
+    "$CROSS_CC" -O2 -s -Wall -Wno-format-truncation -static-libgcc \
+        "${SRCS[@]}" -o build/launcher/HMWLX-linux
+fi
+
 STUB="build/launcher/HMWLX-linux"
 chmod 755 "$STUB"
 echo "    $(du -h "$STUB" | cut -f1)"
