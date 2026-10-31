@@ -3,9 +3,9 @@
 # HMWLX 构建脚本。
 #
 # 用法：
-#   ./build.sh              完整构建（编译 + 测试 + 打包）
-#   ./build.sh --fast       跳过测试
-#   ./build.sh --clean      先 clean 再构建
+#   ./scripts/build.sh              完整构建（编译 + 测试 + 打包）
+#   ./scripts/build.sh --fast       跳过测试
+#   ./scripts/build.sh --clean      先 clean 再构建
 #
 # 为什么需要这个脚本：headlessmc 是 Java 25 编译的（class file 69），
 # 系统默认 JDK 17 只能认到 61。不指定 JDK 25 的话，测试会在
@@ -16,7 +16,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 # ---------------------------------------------------------------------------
 # JDK 25：优先用环境变量，其次探测常见安装位置
@@ -106,7 +107,9 @@ if [[ "$DO_CLEAN" == "1" ]]; then
     echo
 fi
 
-TASKS=(build)
+# build 负责编译 + 测试 + 常规 jar；fatJar 额外产出带全部依赖的可执行 jar。
+# 两个都要：打包脚本（pack-*.sh）读的是 fatJar 的产物。
+TASKS=(build fatJar)
 
 # ---------------------------------------------------------------------------
 # 构建
@@ -127,6 +130,16 @@ if [[ -d build/quarkus-app ]]; then
 fi
 if compgen -G "build/libs/*.jar" > /dev/null; then
     for jar in build/libs/*.jar; do
-        echo "普通 JAR:  $jar  ($(du -h "$jar" | cut -f1)，不含依赖，不可直接运行)"
+        # 区分三种产物，别混着说「不可直接运行」：
+        #   *-all.jar   fat jar，java -jar 就能跑
+        #   其它        普通 jar，缺依赖，不能单独运行
+        case "$jar" in
+            *-all.jar)
+                echo "fat JAR:   $jar  ($(du -h "$jar" | cut -f1)，可 java -jar 直接运行)"
+                ;;
+            *)
+                echo "普通 JAR:  $jar  ($(du -h "$jar" | cut -f1)，不含依赖，不可直接运行)"
+                ;;
+        esac
     done
 fi

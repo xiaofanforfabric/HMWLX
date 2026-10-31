@@ -1,0 +1,357 @@
+# 发版阶段 2：打 tag 并构建全部产物
+#
+# 触发：
+#   - push 到主分支（PR 合并后），自动校验并打 tag
+#   - tag 推送后，构建各平台产物并发布
+#
+# 两段拆开的原因：打 tag 的 job 需要推 tag 的权限，构建的 job 需要
+# 上传 Release 的权限。拆开后各自最小权限，也方便单独重跑。
+#
+# 完整的发版链路：
+#
+#   push "rel: xxx"  ->  release-prepare  ->  PR
+#                                             |
+#                                     人工 review & merge
+#                                             v
+#   push to main     ->  release-tag（本文件 job 1）->  打 tag v0.1
+#                                             v
+#   push tag v0.1    ->  release-tag（本文件 job 2）->  构建 + 发布
+
+name: Release Tag & Build
+
+on:
+  push:
+    # 分支推送：PR 合并后自动打 tag
+    branches: [main, master]
+    # tag 推送：构建并发布产物
+    #
+    # 两件事必须分开听：如果只监听 branches，job 1 打完 tag 后
+    # tag 推送事件不会触发本 workflow，构建永远不会开始。
+    # 如果只监听 tags，合并 PR 后没人负责打 tag。
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已有 tag 名（如 v0.1），留空则按当前版本号推算'
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ==========================================================================
+  # Job 1：打 tag
+  # ==========================================================================
+  tag:
+    name: 打 tag
+    # 只在 push 到主分支时自动跑；tag 触发时不跑（避免递归）。
+    #
+    # test: 提交的排除放在脚本里做（见下面的「确定 tag」步骤）——
+    # GHA 的 if 表达式没有正则，写三个大小写变体也覆盖不全
+    # （tEsT: 照样漏）。交给 release.sh --verify 统一判断更可靠。
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push'
+       && !startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      created: ${{ steps.resolve.outputs.created }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 确定 tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          # 传给 release.sh --verify 判断是否为 test: 演练提交
+          RELEASE_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+
+          # 情况 1：本次就是 tag 推送事件 —— tag 已经有了，不需要再打
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "created=no" >> "$GITHUB_OUTPUT"
+            echo "tag 推送事件，使用已有 tag: $TAG"
+            exit 0
+          fi
+
+          # 情况 2：手动指定 tag
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "created=no" >> "$GITHUB_OUTPUT"
+            echo "手动指定 tag: $INPUT_TAG"
+            exit 0
+          fi
+
+          # 情况 3：主分支合并后，按 gradle.properties 推算新 tag
+          #
+          # --verify 会做三件事：
+          #   - 识别 test: 演练提交（是则直接返回 0，不设 RELEASE_TAG）
+          #   - 检查版本号格式
+          #   - 检查 tag 是否已存在
+          #
+          # 任何一项不满足都视为「无需发版」而非失败 ——
+          # 因为往主分支推普通提交（非发版 PR）也会触发本 workflow。
+          if OUT=$(./scripts/release.sh --verify 2>&1); then
+            echo "$OUT"
+            if [[ -n "${RELEASE_TAG:-}" ]]; then
+              echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+              echo "created=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=" >> "$GITHUB_OUTPUT"
+              echo "created=no" >> "$GITHUB_OUTPUT"
+              echo "::notice::演练提交或版本未变，不发布"
+            fi
+          else
+            echo "$OUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "created=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::无需打 tag（版本未变或 tag 已存在）"
+          fi
+
+      - name: 打 tag 并推送
+        if: steps.resolve.outputs.created == 'yes'
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "HMWLX ${TAG#v}"
+          git push origin "refs/tags/${TAG}"
+          echo "已推送 tag $TAG"
+
+  # ==========================================================================
+  # Job 2：构建
+  # ==========================================================================
+  #
+  # 串行而非 matrix 的原因：
+  #   .deb / .rpm / .AppImage 都从 dist/HMWLX-linux-x64/ 取材，而那
+  #   个目录是 pack-linux.sh 的产物。matrix 里三个平台并行跑，
+  #   formats 会找不到目录直接失败。
+  #
+  #   虽然可以拆成「linux 目录产物」+「依赖它」两个 job，但那需要
+  #   artifact 上传/下载往返 200MB 数据。这里串行三步更快也更简单。
+  #
+  build:
+    name: 构建产物
+    needs: tag
+    if: |
+      needs.tag.outputs.created == 'yes' ||
+      startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确定版本号
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ needs.tag.outputs.tag }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "版本: ${TAG#v}  (tag: $TAG)"
+
+      - name: 安装 JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: 安装系统依赖
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # Skiko 的 libGL / X11 / 字体（同 ci.yml，防止 runner 镜像换代）
+          # 外加打包需要的工具：
+          #   zip/unzip  打包
+          #   rpm        rpmbuild（打 RPM 包）
+          #   xz-utils   zig 的 tar.xz 解压
+          #   file       校验产物类型
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+            libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+            fontconfig fonts-dejavu-core \
+            zip unzip rpm xz-utils file
+
+      - name: 安装 zig
+        # 用官方 tarball 而不是第三方 action：版本可控，且不依赖
+        # action 的维护状态。0.13.0 是本地验证过的版本。
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.13.0
+          curl -fsSL -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/.local/opt"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/opt"
+          echo "$HOME/.local/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: 构建 fat jar
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          # build.sh 会挑 JDK 25 并跑 build + fatJar
+          ./scripts/build.sh --fast
+
+      # ---- 三步打包，顺序不能变 ----
+      #
+      # 1. Windows：独立，产出 .exe
+      # 2. Linux 目录：产出 dist/HMWLX-linux-x64/ + .run + tar.gz
+      # 3. Linux 格式：从第 2 步的目录产出 .deb / .rpm / .AppImage
+      #
+      - name: 打包 Windows
+        run: |
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          ./scripts/pack-windows.sh
+
+      - name: 打包 Linux（目录 + 单文件）
+        run: |
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          ./scripts/pack-linux.sh
+
+      - name: 打包 Linux（DEB / RPM / AppImage）
+        run: |
+          set -euo pipefail
+          chmod +x scripts/*.sh
+          ./scripts/pack-linux-formats.sh
+
+      - name: 列出产物
+        run: |
+          echo "=== dist ==="
+          ls -lh dist/ || true
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: hmwlx-all
+          path: |
+            dist/*.exe
+            dist/*.run
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ==========================================================================
+  # Job 3：发布到 GitHub Releases
+  # ==========================================================================
+  publish:
+    name: 发布到 GitHub Releases
+    needs: [tag, build]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.tag.outputs.created == 'yes' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理产物
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( \
+            -name '*.exe' -o -name '*.run' -o -name '*.deb' \
+            -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' \
+          \) -exec cp {} release/ \;
+          echo "=== 待发布 ==="
+          ls -lh release/
+
+      - name: 生成 release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          [[ -n "${TAG}" && "${TAG}" != "${GITHUB_REF}" ]] || TAG="${{ needs.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 用提交历史生成 changelog。
+          # 找上一个 tag 作为起点；没有就取最近 30 个提交。
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="${PREV_TAG}..${TAG}"
+            echo "变更范围：$RANGE"
+          else
+            RANGE="HEAD"
+            echo "没有上一个 tag，用最近 30 个提交"
+          fi
+
+          {
+            echo "## HMWLX ${VERSION}"
+            echo ""
+            if [[ -n "$PREV_TAG" ]]; then
+              echo "对比：[\`${PREV_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG})"
+              echo ""
+            fi
+            echo "### 变更"
+            echo ""
+            git log "$RANGE" --no-merges --pretty=format:'- %s (%h)' | head -50
+            echo ""
+            echo ""
+            echo "### 下载"
+            echo ""
+            echo "| 平台 | 文件 | 说明 |"
+            echo "|---|---|---|"
+            echo "| Windows | \`HMWLX-${VERSION}-win-x64.exe\` | 双击运行，首次启动自动解压 |"
+            echo "| Linux 通用 | \`HMWLX-${VERSION}-linux-x64.run\` | 单文件，\`chmod +x\` 后运行 |"
+            echo "| Linux 通用 | \`HMWLX-${VERSION}-x86_64.AppImage\` | 单文件便携版 |"
+            echo "| Debian/Ubuntu | \`hmwlx_${VERSION//-/\~}_amd64.deb\` | \`sudo apt install ./xxx.deb\` |"
+            echo "| Fedora/RHEL | \`hmwlx-${VERSION//-/.}-1.x86_64.rpm\` | \`sudo dnf install ./xxx.rpm\` |"
+            echo ""
+            echo "所有包都内置 Java 运行时，无需单独安装 Java。"
+          } > /tmp/notes.md
+
+          cat /tmp/notes.md
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.notes.outputs.tag }}
+          name: HMWLX ${{ steps.notes.outputs.version }}
+          body_path: /tmp/notes.md
+          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
+          # 正式版标为 latest，预发布不占用 latest
+          make_latest: ${{ steps.notes.outputs.prerelease == 'true' && 'false' || 'true' }}
+          files: release/*
+          fail_on_unmatched_files: false
+          draft: false

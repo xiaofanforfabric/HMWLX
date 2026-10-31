@@ -3,11 +3,11 @@
 # HMWLX 一键启动脚本。
 #
 # 用法：
-#   ./run.sh            后台启动（日志写 /tmp/hmylx-run.log）
-#   ./run.sh --log      后台启动，然后持续跟日志（Ctrl+C 只退出日志查看）
-#   ./run.sh --fg       前台启动（日志直接打在终端，Ctrl+C 会关掉窗口）
-#   ./run.sh --stop     停止正在运行的实例
-#   ./run.sh --tail     不启动，只跟日志
+#   ./scripts/run.sh            后台启动（日志写 /tmp/hmylx-run.log）
+#   ./scripts/run.sh --log      后台启动，然后持续跟日志（Ctrl+C 只退出日志查看）
+#   ./scripts/run.sh --fg       前台启动（日志直接打在终端，Ctrl+C 会关掉窗口）
+#   ./scripts/run.sh --stop     停止正在运行的实例
+#   ./scripts/run.sh --tail     不启动，只跟日志
 #
 # 为什么需要这个脚本：headlessmc 是 Java 25 编译的（class file 69），
 # 系统默认 JDK 17 只能认到 61，直接 ./gradlew run 会报 UnsupportedClassVersionError。
@@ -15,7 +15,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 # ---------------------------------------------------------------------------
 # JDK 25：优先用环境变量，其次探测常见安装位置
@@ -151,10 +152,10 @@ if [[ "$SHOW_LOG" == "1" ]]; then
     echo "跟日志中（Ctrl+C 只退出日志查看，游戏窗口不受影响）"
     # trap 必须在 tail 之前装：tail 收到 INT 会立刻退出，
     # 之后再来 trap 就来不及了。
-    trap 'echo; echo "已退出日志查看（游戏仍在运行，停止请用 ./run.sh --stop）"; exit 0' INT
+    trap 'echo; echo "已退出日志查看（游戏仍在运行，停止请用 ./scripts/run.sh --stop）"; exit 0' INT
     tail -f "$LOG_FILE"
 else
-    echo "查看日志：./run.sh --tail"
+    echo "查看日志：./scripts/run.sh --tail"
 fi
 
 exit 0

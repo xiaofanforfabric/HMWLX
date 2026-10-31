@@ -2,7 +2,8 @@ name: CI
 
 # 触发规则
 # - 任何 push / PR 都跑全部测试
-# - 提交信息以 rel: / beta: / RC: / test: 开头时额外跑 build（产物可能为空）
+# - 提交信息以 rel: / RC: / beta: / dev: / test: 开头时，额外跑完整打包演练
+#   （test: 是纯粹的打包验证，不推进版本；用空提交即可触发）
 on:
   push:
     branches: ['**']
@@ -61,19 +62,42 @@ jobs:
           path: build/reports/tests/test
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # 完整打包演练
+  # ==========================================================================
+  #
+  # 触发：提交信息首行为 rel: / RC: / beta: / dev: / test:
+  #
+  # 这个 job 做的是「发版构建能做的事，除了发布」：
+  #   - 编译 + fat jar
+  #   - 打全部平台的产物（exe / run / deb / rpm / AppImage / tar.gz）
+  #   - 上传成 artifact 供下载检查
+  #
+  # 它不发版、不改版本号、不开 PR。用途：
+  #
+  #   * test:  纯粹的打包验证 —— 改完打包脚本想确认能出东西，
+  #            用空提交 `git commit --allow-empty -m "test: 验证打包"`
+  #            就能跑一整轮，不污染版本历史。
+  #   * rel:/RC:/beta:/dev:  发版前的预检。真正的发布由
+  #            release-prepare.yml + release-tag.yml 负责，
+  #            但那时才第一次跑打包就等于把风险留到最后一步。
+  #            这里提前跑一遍，能出什么问题当场就看到。
+  #
+  # 与 release-tag.yml 的 build job 的区别：那边是真正发版时跑的，
+  # 会把产物上传到 Release；这里只上传到 workflow artifact。
+  #
   build:
-    name: Build (release-intent commit)
+    name: 完整打包演练
     runs-on: ubuntu-latest
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
-    # 仅当提交信息以 rel: / beta: / RC: / test: 开头时才构建
-    # 注意：PR 事件的 head commit message 取 github.event.pull_request.title 不准确，
-    # 这里统一用 head_commit.message；PR 场景下退化为 github.sha 对应的提交。
+    # 注意：PR 事件的 head_commit.message 取 head 提交，不是 PR 标题。
     if: |
       startsWith(github.event.head_commit.message, 'rel:') ||
       startsWith(github.event.head_commit.message, 'beta:') ||
       startsWith(github.event.head_commit.message, 'RC:') ||
+      startsWith(github.event.head_commit.message, 'dev:') ||
       startsWith(github.event.head_commit.message, 'test:') ||
       github.event_name == 'workflow_dispatch'
     steps:
@@ -88,14 +112,71 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build
-        run: ./gradlew build --no-daemon --stacktrace
+      - name: 安装打包工具
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # zip/unzip  打压缩包
+          # rpm        rpmbuild（打 RPM）
+          # xz-utils   解压 zig 的 tar.xz
+          # file       校验产物类型
+          sudo apt-get install -y --no-install-recommends \
+            zip unzip rpm xz-utils file
 
-      - name: Upload build artifacts
+      - name: 安装 zig
+        # 用官方 tarball，版本固定。0.13.0 是本地验证过的版本。
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.13.0
+          curl -fsSL -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/.local/opt"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/opt"
+          echo "$HOME/.local/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: 构建 fat jar
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew scripts/*.sh scripts/*.py
+          ./scripts/build.sh --fast
+
+      # 三步打包，顺序不能变：formats 依赖 pack-linux.sh 的目录产物
+      - name: 打包 Windows
+        run: ./scripts/pack-windows.sh
+
+      - name: 打包 Linux（目录 + 单文件）
+        run: ./scripts/pack-linux.sh
+
+      - name: 打包 Linux（DEB / RPM / AppImage）
+        run: ./scripts/pack-linux-formats.sh
+
+      - name: 产物清单
+        run: |
+          echo "=== dist ==="
+          ls -lh dist/ || true
+          echo ""
+          echo "=== 校验关键产物存在 ==="
+          fail=0
+          for pat in 'dist/*.exe' 'dist/*.run' 'dist/*.deb' 'dist/*.rpm' 'dist/*.AppImage'; do
+            if compgen -G "$pat" > /dev/null; then
+              echo "  OK   $pat"
+            else
+              echo "  MISS $pat"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: hmwlx-build
+          name: hmwlx-dryrun
           path: |
-            build/libs/*.jar
-            build/quarkus-app/
-          if-no-files-found: ignore
+            dist/*.exe
+            dist/*.run
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+            dist/*.tar.gz
+          if-no-files-found: warn
+          retention-days: 3

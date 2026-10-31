@@ -59,7 +59,15 @@ import jakarta.enterprise.inject.Alternative
 @ApplicationScoped
 @Alternative
 @Priority(100)
-class LaunchProgressBridge : ProgressbarService {
+// 必须 open：ArC 会为每个 bean 生成 `_ClientProxy` 子类，
+// 而 Kotlin 的 class 默认是 final —— 不 open 就会在容器启动时抛
+// `IncompatibleClassChangeError: LaunchProgressBridge_ClientProxy
+//  cannot inherit from final class`。
+//
+// 这个问题只在**打包后**才暴露：`gradlew run` 用的是未经 Quarkus
+// 构建期增强的类，不会生成代理子类。所以开发期一切正常，
+// 打出来的安装包一启动就炸。
+open class LaunchProgressBridge : ProgressbarService {
 
     override fun getName(): String = "hmwlx-gui"
 

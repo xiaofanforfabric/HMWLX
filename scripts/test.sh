@@ -4,15 +4,15 @@
 # 让「本地绿 → 远端绿」成为可靠的预期，而不是碰运气。
 #
 # 用法：
-#   ./test.sh              跑全部测试（默认，等同 CI 的 test job）
-#   ./test.sh --build      测试 + 构建（等同 CI 的 build job）
-#   ./test.sh --clean      先 clean 再跑
-#   ./test.sh --fast       只编译，不跑测试
-#   ./test.sh --verbose    打印完整 Gradle 输出
-#   ./test.sh --help       看用法
+#   ./scripts/test.sh              跑全部测试（默认，等同 CI 的 test job）
+#   ./scripts/test.sh --build      测试 + 构建（等同 CI 的 build job）
+#   ./scripts/test.sh --clean      先 clean 再跑
+#   ./scripts/test.sh --fast       只编译，不跑测试
+#   ./scripts/test.sh --verbose    打印完整 Gradle 输出
+#   ./scripts/test.sh --help       看用法
 #
 # 退出码：0 表示全部通过，非 0 表示有失败 —— 可以直接用在
-#   `./test.sh && git push` 这类串联命令里。
+#   `./scripts/test.sh && git push` 这类串联命令里。
 #
 # ---------------------------------------------------------------------------
 # 为什么脚本里的命令和 CI 有细微差别
@@ -43,7 +43,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 # ---------------------------------------------------------------------------
 # JDK 25
@@ -87,7 +88,7 @@ CI 用的是 eclipse-temurin:25，本地需要 JDK 25 才能跑测试
 （headlessmc 的 class 文件版本是 69，JDK 17 只能认到 61）。
 
 可以用环境变量指定：
-    HMYLX_JAVA_HOME=/path/to/jdk25 ./test.sh
+    HMYLX_JAVA_HOME=/path/to/jdk25 ./scripts/test.sh
 MSG
     exit 1
 }
@@ -192,6 +193,35 @@ echo "=== 执行 ==="
 echo "任务: ${TASKS[*]} ${GRADLE_ARGS[*]}"
 echo ""
 
+# ---------------------------------------------------------------------------
+# 先跑打包脚本自己的单元测试
+# ---------------------------------------------------------------------------
+#
+# 这些是纯 Python，几毫秒就跑完，但价值不低：
+# bump-version 决定发布版本号，算错了（比如 0.1-RC1 打 beta: 时
+# 没报错反而给了 0.1-beta2）会直接发出一个不该存在的版本，事后删除
+# 已发布的 tag 和 Release 都很麻烦。
+#
+# 放在 Gradle 之前：如果版本逻辑坏了，没必要等几分钟编译。
+#
+if compgen -G "$PWD/scripts/test-*.py" > /dev/null; then
+    echo "[0] 脚本单元测试"
+    # 一次运行，把输出存下来：成功时只显示摘要，失败时全部打出来。
+    # 跑两次只是为了同时看到输出和退出码，那是浪费。
+    for t in "$PWD"/scripts/test-*.py; do
+        echo "  -> $(basename "$t")"
+        if python3 "$t" > /tmp/hmylx-pytest.log 2>&1; then
+            tail -3 /tmp/hmylx-pytest.log | sed 's/^/     /'
+        else
+            echo "     ✗ 失败，完整输出：" >&2
+            sed 's/^/     /' /tmp/hmylx-pytest.log >&2
+            exit 1
+        fi
+    done
+    echo "  ✓ 全部通过"
+    echo ""
+fi
+
 if [[ "$DO_CLEAN" == "1" ]]; then
     # clean 单独跑：和 build 拼成一条命令时，任务图里已经算好的
     # build/ 路径会被 clean 删掉，偶发 "output dir does not exist"。
@@ -226,7 +256,7 @@ echo "=== 结果 ==="
 if [[ "$FAST" != "1" ]] && grep -qE ':test UP-TO-DATE|:test FROM-CACHE' /tmp/hmylx-test.log 2>/dev/null; then
     echo "⚠️  :test 任务被跳过（输入未变，复用了上次结果）"
     echo "    下面的数字来自上一次运行，不是这次真实执行的结果。"
-    echo "    要强制真跑一遍：./test.sh --clean"
+    echo "    要强制真跑一遍：./scripts/test.sh --clean"
     echo ""
 fi
 
@@ -273,7 +303,7 @@ else
     echo "❌ 失败（退出码 $EXIT_CODE）"
     if [[ "$VERBOSE" != "1" && -f /tmp/hmylx-test.log ]]; then
         echo "   完整输出: /tmp/hmylx-test.log"
-        echo "   或重跑:   ./test.sh --verbose"
+        echo "   或重跑:   ./scripts/test.sh --verbose"
     fi
 fi
 

@@ -2,7 +2,7 @@
 #
 # 规则：
 #   - 任意分支 push / PR 都跑全部测试
-#   - 提交信息以 rel: / beta: / RC: / test: 开头时，额外跑 build
+#   - 提交信息以 rel: / beta: / RC: / dev: 开头时，额外跑 build
 #
 # JDK：headlessmc 3.0.0-RC10-cn.* 的 class 文件要求 JVM 25+，
 #      因此统一使用带 JDK 25 的镜像。
@@ -13,7 +13,7 @@
 #      测试全绿却让整个 Stage 失败。
 #
 # ${CNB_COMMIT_MESSAGE_TITLE} 是提交信息首行，
-# 用 grep -qE '^(rel|beta|RC|test):' 判断是否为发布意图提交。
+# 用 grep -qiE '^(rel|beta|RC|dev|test):' 判断是否为发布意图提交。
 #
 # 系统库：Compose Desktop 的渲染后端 Skiko 在类加载时 dlopen 自己的
 #      native 库，而 libskiko-linux-x64.so 的动态依赖里有 libGL.so.1。
@@ -73,19 +73,94 @@
         # 仅 release-intent 提交才构建
         - name: build
           if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qE '^(rel|beta|RC|test):'
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
           script: |
             chmod +x ./gradlew
             ./gradlew build --no-daemon --no-build-cache --stacktrace
 
         - name: show-artifacts
           if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qE '^(rel|beta|RC|test):'
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
           script: |
             echo "=== build/libs ==="
             ls -la build/libs/ 2>/dev/null || true
             echo "=== build/quarkus-app ==="
             ls -la build/quarkus-app/ 2>/dev/null || true
+
+        # ------------------------------------------------------------------
+        # 发版打包
+        #
+        # 触发条件与 GitHub Actions 保持一致：提交信息首行以
+        # rel: / RC: / beta: / dev: 开头。
+        #
+        # 与 GitHub 的分工：
+        #   GitHub  自动开 PR 推进版本号 -> 合并后打 tag -> 构建并发布
+        #   CNB     同样的提交进来时，也跑一遍构建，产物传到 CNB 制品库
+        #
+        # 两边都构建是有意为之：产物清单、文件大小可以互相验证，
+        # 也避免单点故障（一个平台挂了另一个还能发）。
+        # ------------------------------------------------------------------
+        - name: release-build
+          if: |
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+          script: |
+            set -euo pipefail
+            echo "发版/演练提交：$CNB_COMMIT_MESSAGE_TITLE"
+
+            # 版本号与阶段解析（与 GitHub 用同一套脚本，保证行为一致）。
+            #
+            # test: 前缀时 release.sh 只输出提示、不改 gradle.properties，
+            # 后面照常打包 —— 这就是「演练」：产物能出，但版本号不动、
+            # 不发版。用空提交即可触发：
+            #   git commit --allow-empty -m "test: 验证打包"
+            ./scripts/release.sh --prepare "$CNB_COMMIT_MESSAGE_TITLE"
+
+            # 打包需要的工具：zig 打启动器、rpm 打 RPM 包、zip 打压缩包
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                zip unzip rpm xz-utils file curl
+            fi
+
+            # zig：官方 tarball，0.13.0 是本地验证过的版本
+            ZIG_VERSION=0.13.0
+            if ! command -v zig >/dev/null 2>&1; then
+              curl -fsSL -o /tmp/zig.tar.xz \
+                "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+              mkdir -p "$HOME/.local/opt"
+              tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/opt"
+              export PATH="$HOME/.local/opt/zig-linux-x86_64-${ZIG_VERSION}:$PATH"
+            fi
+            echo "zig: $(zig version)"
+
+            chmod +x ./gradlew scripts/*.sh scripts/*.py
+
+            # 构建 fat jar（build.sh 会挑 JDK 25）
+            ./scripts/build.sh --fast
+
+            # 三步打包，顺序不能变：formats 依赖 pack-linux.sh 的目录产物
+            ./scripts/pack-windows.sh
+            ./scripts/pack-linux.sh
+            ./scripts/pack-linux-formats.sh
+
+            echo "=== 产物 ==="
+            ls -lh dist/
+
+        - name: release-upload
+          if: |
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+          script: |
+            set -euo pipefail
+            # 列出产物供 CNB 制品库收集。
+            # .cnb.yml 里不需要显式声明制品路径 —— CNB 会收集
+            # 构建结束时 dist/ 下的文件，在「制品」页可下载。
+            echo "=== 发版产物 ==="
+            for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz; do
+              [ -f "$f" ] && echo "$(du -h "$f" | cut -f1)  $f"
+            done
+            echo ""
+            VERSION=$(sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1 | xargs)
+            echo "版本: $VERSION"
 
   pull_request:
     - name: pr-check
