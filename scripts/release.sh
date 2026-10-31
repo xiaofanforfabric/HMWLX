@@ -43,6 +43,22 @@
 #   ./scripts/release.sh --verify                  校验并准备打 tag
 #   ./scripts/release.sh --detect "rel: 修好了"     只打印阶段，不改文件
 #
+# ==========================================================================
+# 关于 test: 前缀
+# ==========================================================================
+#
+#   test: 是「打包演练」—— 跑一遍完整的 CI 构建（编译 + 全平台打包），
+#   但不推进版本号、不开 PR、不发版。
+#
+#   用途：改了打包脚本想验证能不能出东西时，用空提交触发：
+#     git commit --allow-empty -m "test: 验证打包"
+#     git push
+#
+#   这样不会污染版本历史（不会产生 release/v0.2 分支和 PR）。
+#
+#   本脚本对 test: 的处理：--detect 返回 "test"，--prepare 给出提示后
+#   直接返回，不修改 gradle.properties。
+#
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,6 +79,7 @@ info() { echo "==> $*"; }
 #   RC:    候选版
 #   beta:  公测版
 #   dev:   开发版
+#   test:  打包演练（不进版本状态机，见下方说明）
 #
 # 注意 RC 通常写作大写，但这里不区分大小写 —— 用户敲 rc: 也能认。
 detect_stage() {
@@ -70,19 +87,38 @@ detect_stage() {
     local first_line
     first_line="$(printf '%s' "$msg" | head -1)"
 
-    # 用 bash 正则，避免 grep -o 在不同平台行为差异
-    if [[ "$first_line" =~ ^(rel|RC|beta|dev):[[:space:]]* ]]; then
+    # 用 bash 正则，避免 grep -o 在不同平台行为差异。
+    # 大小写不敏感：RC: / rc: / Rc: 都认，test: / TEST: 也都认。
+    # 注意保存并恢复 nocasematch，这个 shopt 是全局状态，
+    # 乱改会影响调用方后续的字符串比较。
+    local _old_nocase
+    _old_nocase="$(shopt -p nocasematch 2>/dev/null || true)"
+    shopt -s nocasematch
+    if [[ "$first_line" =~ ^(rel|RC|beta|dev|test)[[:space:]]*:[[:space:]]* ]]; then
         local s="${BASH_REMATCH[1]}"
-        # 规范化大小写：RC 保持大写，其余小写
+        s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+        eval "$_old_nocase" 2>/dev/null || shopt -u nocasematch
         case "$s" in
-            rel|REL|Rel)   echo "rel" ;;
-            RC|rc|Rc|rC)   echo "RC" ;;
-            beta|BETA|Beta) echo "beta" ;;
-            dev|DEV|Dev)   echo "dev" ;;
+            rel)  echo "rel" ;;
+            rc)   echo "RC" ;;   # 统一输出大写 RC
+            beta) echo "beta" ;;
+            dev)  echo "dev" ;;
+            test) echo "test" ;;
         esac
         return 0
     fi
+    eval "$_old_nocase" 2>/dev/null || shopt -u nocasematch
     return 1
+}
+
+# test: 是「打包演练」前缀 —— 只跑 CI 构建，不推进版本号。
+#
+# 它不进 STAGES 状态机（bump-version.py 不认识 test），也不会出现在
+# 任何发版路径上。这里识别它只是为了：
+#   1. --detect 能告诉调用方「这是演练，不是发版」
+#   2. --prepare 遇到它时给出明确提示，而不是笼统地报「版本推进失败」
+is_dryrun_stage() {
+    [[ "$1" == "test" ]]
 }
 
 # 判断版本是否预发布（含 -dev / -beta / -RC）
@@ -118,7 +154,7 @@ cmd_detect() {
     local msg="${1:-${RELEASE_MESSAGE:-}}"
     local stage
     if ! stage="$(detect_stage "$msg")"; then
-        echo "不是发版提交（提交信息首行不以 rel:/RC:/beta:/dev: 开头）"
+        echo "不是发版提交（提交信息首行不以 rel:/RC:/beta:/dev:/test: 开头）"
         return 1
     fi
     echo "$stage"
@@ -129,7 +165,18 @@ cmd_prepare() {
     [[ -n "$msg" ]] || die "没有提交信息。用 --prepare \"rel: xxx\" 或设 RELEASE_MESSAGE"
 
     local stage
-    stage="$(detect_stage "$msg")" || die "提交信息首行不是发版前缀（rel:/RC:/beta:/dev:）"
+    stage="$(detect_stage "$msg")" || die "提交信息首行不是发版前缀（rel:/RC:/beta:/dev:/test:）"
+
+    # test: 是演练前缀，明确拒绝推进版本 ——
+    # 给出可执行的建议，而不是让 bump-version 报「未知阶段」。
+    if is_dryrun_stage "$stage"; then
+        echo "注意：$stage: 是打包演练前缀，不会推进版本号。" >&2
+        echo "      CI 会跑一遍完整打包但不发版。" >&2
+        echo "      要真正发版，请用 rel: / RC: / beta: / dev:。" >&2
+        emit_var "RELEASE_STAGE" "test"
+        emit_var "VERSION_CHANGED" "false"
+        return 0
+    fi
 
     local current next
     # 先读当前值（--quiet 模式下 bump-version 只输出结果，这里要原始值）
@@ -171,6 +218,23 @@ cmd_prepare() {
 }
 
 cmd_verify() {
+    # 演练提交不发版。
+    #
+    # 放在这里而不是 workflow 的 if 里：GHA 表达式没有正则，
+    # 用 startsWith 得写 test:/TEST:/Test: 三个变体，还漏 tEsT:。
+    # 统一由脚本判断，一处生效，GitHub 和 CNB 都走同一条逻辑。
+    local msg="${1:-${RELEASE_MESSAGE:-${CI_COMMIT_MESSAGE:-}}}"
+    if [[ -n "$msg" ]]; then
+        local stage
+        if stage="$(detect_stage "$msg")" && is_dryrun_stage "$stage"; then
+            echo "这是 test: 演练提交，跳过发版。"
+            emit_var "APP_VERSION" ""
+            emit_var "RELEASE_TAG" ""
+            emit_var "IS_PRERELEASE" ""
+            return 0
+        fi
+    fi
+
     local version tag
     version="$(sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' "$GRADLE_PROPS" | head -1 | tr -d '\r' | xargs)"
     [[ -n "$version" ]] || die "gradle.properties 里没有 appVersion"

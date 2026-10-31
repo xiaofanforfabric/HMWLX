@@ -42,6 +42,15 @@ jobs:
     name: 推进版本号并开 PR
     runs-on: ubuntu-latest
     # 只处理发版提交；workflow_dispatch 时总是执行
+    # 注意：这里【故意】不包含 test:
+    #
+    #   test: 是「打包演练」前缀，只跑构建，不推进版本号。
+    #   ci.yml 的 build job 会接住它。如果这里也加上 test:，
+    #   一个 `git commit --allow-empty -m "test: xxx"` 就会真的
+    #   改版本号并开 PR —— 那就不是演练了。
+    #
+    #   所以：想验证打包，用 test:；想发版，用 rel:/RC:/beta:/dev:。
+    #
     if: |
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.head_commit.message, 'rel:') ||

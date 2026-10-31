@@ -23,8 +23,11 @@ dev  <  beta  <  RC  <  rel
 | 公测 | `beta:` | `0.1-beta1` | 公开测试 |
 | 候选 | `RC:` | `0.1-RC1` | 功能冻结，只修 bug |
 | 正式 | `rel:` | `0.1` | 正式发布 |
+| — | `test:` | 不变 | **打包演练**，不进版本状态机 |
 
 后缀无数字等价于 1：`0.1-dev` 就是 `0.1-dev1`。
+
+`test:` 是特殊的 —— 它不属于版本阶段，只用来触发一次完整的打包流程。
 
 ---
 
@@ -69,6 +72,38 @@ dev  <  beta  <  RC  <  rel
 | `dev:` | `0.2-dev1` |
 
 **要点**：正式版发布后，任何前缀都会先递增小版本，因为「0.1 已经发完了，接下来是 0.2 的事」。
+
+---
+
+## 打包演练（`test:`）
+
+改完打包脚本，想确认能出东西，但不想动版本号、不想开 PR：
+
+```bash
+git commit --allow-empty -m "test: 验证打包"
+git push
+```
+
+会发生什么：
+
+| 会做 | 不会做 |
+|---|---|
+| 跑全部单元测试 | 改 `gradle.properties` |
+| 编译 + 打 fat jar | 开 `release/*` 分支 |
+| 打全部平台产物 | 开 PR |
+| 上传成 workflow artifact | 打 tag |
+|  | 创建 Release |
+
+产物在 Actions 页面的 `hmwlx-dryrun` artifact 里，保留 3 天。
+
+**用途**：
+
+- 改了 `pack-*.sh` / `sfx.c` / `skiko-strip.sh` 之后验证
+- 发版前预检 —— 真正的发布由 `release-prepare` + `release-tag` 负责，
+  但那时才第一次跑打包就等于把风险留到最后一步。用 `test:` 提前跑一遍，
+  能出什么问题当场就看到。
+
+**空提交完全合法**，`git commit --allow-empty` 就是为这种场景设计的。
 
 ---
 
@@ -203,6 +238,12 @@ python3 scripts/test-bump-version.py
 **Q: tag 推送后没构建**
 
 检查 `.github/workflows/release-tag.yml` 的 `on.push.tags` 是否包含 `v*`。只监听 `branches` 时 tag 事件不会触发。
+
+**Q: 打 `test:` 但版本号变了**
+
+不应该发生。`release.sh --prepare` 遇到 `test:` 会打印提示后直接返回，
+不碰 `gradle.properties`。如果版本真变了，检查 CI 里是不是把 `test:`
+误加进了 `release-prepare.yml` 的触发条件 —— 那里**故意**只列了四个发版前缀。
 
 **Q: 想重发某个版本**
 

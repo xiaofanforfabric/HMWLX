@@ -46,10 +46,15 @@ jobs:
   # ==========================================================================
   tag:
     name: 打 tag
-    # 只在 push 到主分支时自动跑；tag 触发时不跑（避免递归）
+    # 只在 push 到主分支时自动跑；tag 触发时不跑（避免递归）。
+    #
+    # test: 提交的排除放在脚本里做（见下面的「确定 tag」步骤）——
+    # GHA 的 if 表达式没有正则，写三个大小写变体也覆盖不全
+    # （tEsT: 照样漏）。交给 release.sh --verify 统一判断更可靠。
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
+      (github.event_name == 'push'
+       && !startsWith(github.ref, 'refs/tags/'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,6 +71,8 @@ jobs:
         id: resolve
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          # 传给 release.sh --verify 判断是否为 test: 演练提交
+          RELEASE_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
 
@@ -88,13 +95,25 @@ jobs:
 
           # 情况 3：主分支合并后，按 gradle.properties 推算新 tag
           #
-          # --verify 会检查版本号格式和 tag 是否已存在。
-          # tag 已存在时不视为失败，而是「无需发版」——
+          # --verify 会做三件事：
+          #   - 识别 test: 演练提交（是则直接返回 0，不设 RELEASE_TAG）
+          #   - 检查版本号格式
+          #   - 检查 tag 是否已存在
+          #
+          # 任何一项不满足都视为「无需发版」而非失败 ——
           # 因为往主分支推普通提交（非发版 PR）也会触发本 workflow。
-          if ./scripts/release.sh --verify; then
-            echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-            echo "created=yes" >> "$GITHUB_OUTPUT"
+          if OUT=$(./scripts/release.sh --verify 2>&1); then
+            echo "$OUT"
+            if [[ -n "${RELEASE_TAG:-}" ]]; then
+              echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+              echo "created=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=" >> "$GITHUB_OUTPUT"
+              echo "created=no" >> "$GITHUB_OUTPUT"
+              echo "::notice::演练提交或版本未变，不发布"
+            fi
           else
+            echo "$OUT"
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "created=no" >> "$GITHUB_OUTPUT"
             echo "::notice::无需打 tag（版本未变或 tag 已存在）"
