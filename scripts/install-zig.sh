@@ -24,9 +24,12 @@
 #   2. $ROOT/.tooling/zig         项目同目录 —— 本地默认首选
 #   3. /tmp/hmwlx-zig             /tmp 兜底，但要小心：CNB 的 /tmp 常是
 #                                 overlay 挂载，同样不支持批量小文件
-#   4. $HOME/.local/opt           最后的兜底
+#   4. $HOME/.local/opt           $HOME 兜底
 #   5. $HOME/.cache/hmwlx-zig     **最后**才试：CI 上那一堆 ENOSYS 都是从
 #                                 $HOME 报出来的，别让它抢在前面
+#
+# 每个位置都试两层解压方式（整包 → 按目录）。CNB 上五个位置全报 ENOSYS
+# 之后才确认：光换位置治不好病，得改解压方式，见下一节。
 #
 # 为什么项目目录排第一：
 #   本地开发和 CNB 一样，仓库就是普通的 git 工作区，文件系统语义正常；
@@ -54,6 +57,26 @@
 #
 #   ZIG_BIN_DIR="$(./scripts/install-zig.sh --path)"
 #   export PATH="$ZIG_BIN_DIR:$PATH"
+#
+# ==========================================================================
+# 解压方式：整棵解不大，就只解需要的
+# ==========================================================================
+#
+# CNB 的构建容器里，五个候选位置解 zig 官方 tarball 时 **全部** 报
+# "Cannot open: Function not implemented"（ENOSYS）。tar 打印了三万条
+# 报错、三层嵌套目录直接 Cannot mkdir —— 不是某个位置的问题，是这些
+# overlay / 分布式存储根本承受不了 tar 那种「上万个小文件 + 深度嵌套」
+# 的写入模式，`open(2)` 在半路就返回 ENOSYS。
+#
+# 但真要编译 C，只用到其中一部分：
+#   zig 本体 + lib/std + lib/libc + lib/include + lib/compiler_rt*
+# 而 lib/tsan、lib/libcxx、lib/libunwind、doc/ 这些占大头的，
+# 交叉编译启动器时一个都用不上。
+#
+# 所以整包失败后改成按 lib/ 下的**直接子项**逐个单独解压，某个子项
+# 失败就跳过它继续下一个。每解一个子项是一次独立的小 tar 操作，不会
+# 在一棵大树上撞 ENOSYS；真撞上了也只丢 tsan 这种无关目录。
+# 少了必需项的安装不会被当成成功 —— 解完先跑 zig version 验一遍。
 #
 # ==========================================================================
 # 下载地址（镜像）
@@ -145,16 +168,26 @@ candidates+=("${HOME:-/root}/.local/opt")
 candidates+=("${HOME:-/root}/.cache/hmwlx-zig")
 
 # ---------------------------------------------------------------- 已装好？
+#
+# 除了标准的 zig-linux-x86_64-<ver>/ 目录，也认「按目录解压」留下的那份：
+# 顶层目录名由 tar 顶层条目决定，这里用通配各扫一层，不按名字猜。
+zig_ready() {
+    local bin
+    for bin in "$1/$EXTRACTED_DIR/zig" "$1"/zig-linux-*/zig; do
+        [[ -x "$bin" ]] || continue
+        "$bin" version >/dev/null 2>&1 && { dirname "$bin"; return 0; }
+    done
+    return 1
+}
+
 for dir in "${candidates[@]}"; do
-    if [[ -x "$dir/$EXTRACTED_DIR/zig" ]]; then
-        if "$dir/$EXTRACTED_DIR/zig" version > /dev/null 2>&1; then
-            if [[ "${1:-}" == "--path" || "${1:-}" == "--quiet" ]]; then
-                echo "$dir/$EXTRACTED_DIR"
-            else
-                info "zig 已就绪: $dir/$EXTRACTED_DIR ($("$dir/$EXTRACTED_DIR/zig" version))"
-            fi
-            exit 0
+    if ready="$(zig_ready "$dir")"; then
+        if [[ "${1:-}" == "--path" || "${1:-}" == "--quiet" ]]; then
+            echo "$ready"
+        else
+            info "zig 已就绪: $ready ($("$ready/zig" version))"
         fi
+        exit 0
     fi
 done
 
@@ -227,6 +260,75 @@ if ! tar -tf "$CACHE" > /dev/null 2>&1; then
   可以手动删掉 $CACHE 再试。"
 fi
 
+# ---------------------------------------------------------------- 解压实现
+#
+# 两个层次：
+#   full    整包 tar -xf，一次写 1.5 万个文件。本地/普通磁盘最快。
+#   sparse  只解 zig 真正需要的目录（zig 可执行文件 + lib/ 下的子项），
+#           每个子项单独一次 tar，撞上 ENOSYS 就丢掉那个子项继续。
+#           见文件头「解压方式」一节。
+#
+# 顺序：先整包，整包不行再 sparse。整包成功时行为完全和以前一致，
+# 所以本地开发、GitHub Actions 都不受影响；只有那种「整包必然 ENOSYS」
+# 的存储才会走到 sparse，而它在那边恰好是唯一能出结果的路径。
+
+# 必需：实测编译 launcher/sfx.c 少一样就报错 ——
+#   zig / lib/std            zig cc 本体
+#   lib/libc                 交叉编译 glibc target 的头文件
+#   lib/include              libc 那个 stddef.h 等基础头文件在这
+#   lib/compiler_rt.zig      编译 C 时 zig 要先编 compiler_rt
+#   lib/compiler_rt/         上面那个的各个实现文件
+SPARSE_REQUIRED=(zig lib/std lib/libc lib/include \
+                 lib/compiler_rt.zig lib/compiler_rt)
+# 其余都可丢：交叉编译 x86_64-linux-gnu 用不到 tsan/cxx/unwind。
+# doc 最占地方，先试它。解不开就跳过，不影响出包。
+SPARSE_OPTIONAL=(doc lib/tsan lib/libcxx lib/libcxxabi lib/libunwind \
+                 lib/compiler lib/init)
+
+# 展开后检查 zig 能不能真的跑起来 —— 这是唯一可靠的判据，
+# 别去猜目录名（镜像重打包可能改前缀）。
+zig_ok() {
+    local bin="$1"
+    [[ -n "$bin" && -x "$bin" ]] || return 1
+    "$bin" version >/dev/null 2>&1
+}
+
+extract_full() {
+    local dir="$1" log="$CACHE.tar.log" bin
+    tar -xf "$CACHE" -C "$dir" 2>"$log"
+    bin="$(find "$dir" -maxdepth 3 -type f -name zig -perm -u+x 2>/dev/null | head -1)"
+    zig_ok "$bin" && { echo "$bin"; return 0; }
+    return 1
+}
+
+extract_sparse() {
+    local dir="$1" log="$CACHE.sparse.log" top entry dropped=() kept=0 bin
+    : >"$log"
+
+    # 归档顶层目录名不写死：镜像重打包时可能改前缀。
+    top="$(tar -tf "$CACHE" 2>/dev/null | head -1 | cut -d/ -f1)"
+    [[ -n "$top" ]] || return 1
+
+    for entry in "${SPARSE_REQUIRED[@]}" "${SPARSE_OPTIONAL[@]}"; do
+        if tar -xf "$CACHE" -C "$dir" "$top/$entry" 2>>"$log"; then
+            kept=$((kept + 1))
+        else
+            # 必需项失败说明这份 zig 注定不全，直接放弃这个位置。
+            case " ${SPARSE_REQUIRED[*]} " in
+                *" $entry "*) return 1 ;;
+            esac
+            dropped+=("$entry")
+        fi
+    done
+
+    bin="$dir/$top/zig"
+    zig_ok "$bin" || return 1
+    if [[ ${#dropped[@]} -gt 0 ]]; then
+        info "  已跳过解不开的目录：${dropped[*]}（编译用不到）"
+    fi
+    echo "$bin"
+}
+
 ZIG_BIN=""
 for dir in "${candidates[@]}"; do
     info "探测 $dir …"
@@ -235,20 +337,24 @@ for dir in "${candidates[@]}"; do
         continue
     fi
 
-    info "  可用，解压到 $dir"
     rm -rf "${dir:?}/$EXTRACTED_DIR"
     mkdir -p "$dir"
-    if tar -xf "$CACHE" -C "$dir" 2>"$CACHE.tar.log"; then
-        # 归档里的顶层目录名不要写死：镜像重打包时可能改前缀，
-        # 直接找 zig 可执行文件比猜目录名稳。
-        ZIG_BIN="$(find "$dir" -maxdepth 3 -type f -name zig -perm -u+x 2>/dev/null | head -1)"
-        [[ -n "$ZIG_BIN" && -x "$ZIG_BIN" ]] && break
-        ZIG_BIN=""
-        info "  解压后找不到 zig 可执行文件，换下一个"
-    else
-        info "  解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），换下一个"
-        tail -n 5 "$CACHE.tar.log" | sed 's/^/    /' >&2
+
+    info "  可用，整包解压到 $dir"
+    if ZIG_BIN="$(extract_full "$dir")"; then
+        break
     fi
+    info "  整包解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），改按目录逐个解"
+    tail -n 5 "$CACHE.tar.log" | sed 's/^/    /' >&2
+    rm -rf "${dir:?}/$EXTRACTED_DIR"
+
+    if ZIG_BIN="$(extract_sparse "$dir")"; then
+        info "  按目录解压成功"
+        break
+    fi
+    info "  按目录解压也失败，换下一个位置"
+    tail -n 5 "$CACHE.sparse.log" 2>/dev/null | sed 's/^/    /' >&2
+
     # 清掉半成品，否则下次的「已装好？」检查可能撞见残缺目录
     rm -rf "${dir:?}/$EXTRACTED_DIR"
     ZIG_BIN=""
@@ -258,7 +364,7 @@ if [[ -z "$ZIG_BIN" ]]; then
     # 失败时不能只说「都失败了，自己指定个目录吧」—— 那句话在 99% 的
     # 情况下都是误导：位置基本没问题，坏的是缓存或环境。把证据摊开。
     echo "" >&2
-    echo "错误：所有候选位置都无法解压 zig。" >&2
+    echo "错误：所有候选位置都无法解压 zig（整包和按目录都试过了）。" >&2
     echo "" >&2
     echo "  压缩包：$CACHE（$(stat -c%s "$CACHE" 2>/dev/null || echo '?') 字节）" >&2
     echo "  校验和：$(sha256sum "$CACHE" 2>/dev/null | cut -d' ' -f1 || echo '?')" >&2
@@ -272,14 +378,14 @@ if [[ -z "$ZIG_BIN" ]]; then
         fi
     done
     echo "" >&2
-    if [[ -s "$CACHE.tar.log" ]]; then
-        echo "  最后一次 tar 的报错（末 10 行）：" >&2
-        tail -n 10 "$CACHE.tar.log" | sed 's/^/    /' >&2
+    if [[ -s "$CACHE.sparse.log" ]]; then
+        echo "  最后一次按目录解压的报错（末 10 行）：" >&2
+        tail -n 10 "$CACHE.sparse.log" | sed 's/^/    /' >&2
     fi
     echo "" >&2
     echo "  常见原因：" >&2
     echo "    1. 缓存里的压缩包是坏的 —— 删掉 $CACHE 重试" >&2
-    echo "    2. 全部位置都失败 = 存储撑不住 1.5 万个嵌套小文件" >&2
+    echo "    2. ENOSYS 一大堆 = 存储撑不住 1.5 万个嵌套小文件" >&2
     echo "       （scripts/zig-selfcheck.sh 会在每个位置实测一遍，看那份日志）" >&2
     echo "    3. 真的没有可写位置 —— HMWLX_ZIG_DIR=/some/path 指定一个" >&2
     die "zig 安装失败"
