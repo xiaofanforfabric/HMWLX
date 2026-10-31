@@ -21,12 +21,25 @@
 # ==========================================================================
 #
 #   1. $HMWLX_ZIG_DIR         显式指定（CI 里可以精确控制）
-#   2. /tmp/hmwlx-zig         /tmp 通常是本地盘，对大量小文件最友好
-#   3. $PWD/.tooling/zig      仓库目录下（记得加 .gitignore）
-#   4. $HOME/.local/opt       最后的兜底，某些环境这里反而是唯一可写的
+#   2. $PWD/.tooling/zig      项目同目录 —— 默认首选
+#   3. /tmp/hmwlx-zig         /tmp 兜底，但要小心：CNB 的 /tmp 是
+#                             overlay 挂载，同样不支持批量小文件
+#   4. $HOME/.local/opt       最后的兜底
+#
+# 为什么项目目录排第一：
+#   仓库所在的盘是真实工作区的盘，一定有正常文件系统语义。
+#   而且 zig 解到项目里，反复跑脚本不用重新下载解压，
+#   也方便本地调试。.tooling/ 已加进 .gitignore。
+#
+#   /tmp 在容器里经常是 overlayfs 或内存盘，对「一次创建上千个小文件」
+#   这种模式支持很差 —— CNB 上就是这样：mkdir 能过，真解压就 ENOSYS。
 #
 # 每个位置都会先做一次「能不能创建 13000 个文件」的快速探测：
 # 建 200 个空文件试试，不行就换下一个。比解压到一半失败快得多。
+#
+# 注意：探测通过 ≠ 解压一定成功。CNB 上 200 个平铺文件能过，
+# 但 tar 展开 lib/std 那 16000 个嵌套文件就挂了。所以探测只是
+# 快速排除明显不可用的位置，真正的保险是「项目目录排第一」。
 #
 # ==========================================================================
 # 用法
@@ -87,8 +100,10 @@ probe_dir() {
 # ---------------------------------------------------------------- 候选位置
 candidates=()
 [[ -n "${HMWLX_ZIG_DIR:-}" ]] && candidates+=("$HMWLX_ZIG_DIR")
-candidates+=("/tmp/hmwlx-zig")
+# 项目同目录优先：这里的文件系统一定支持正常语义
 candidates+=("$ROOT/.tooling/zig")
+# /tmp 兜底但靠后：容器里常是 overlayfs，批量小文件会 ENOSYS
+candidates+=("/tmp/hmwlx-zig")
 candidates+=("${HOME:-/root}/.local/opt")
 
 # ---------------------------------------------------------------- 已装好？
@@ -123,7 +138,17 @@ done
   可以用 HMWLX_ZIG_DIR=/some/path 指定一个可写目录。"
 
 # ---------------------------------------------------------------- 下载
-CACHE="${TMPDIR:-/tmp}/hmwlx-zig-${ZIG_VERSION}.tar.xz"
+#
+# 缓存放到项目内的 .tooling/ 而不是 /tmp：
+#   1. 单文件写入 /tmp 一般没问题，但 CNB 的 /tmp 是 overlay，
+#      写 44MB 也不是不可能出问题，能避开就避开；
+#   2. 缓存在项目里，重复跑脚本不用重新下载（CI 里无所谓，
+#      本地调试时省很多时间）。
+#
+CACHE_DIR="$ROOT/.tooling/cache"
+mkdir -p "$CACHE_DIR"
+CACHE="$CACHE_DIR/hmwlx-zig-${ZIG_VERSION}.tar.xz"
+
 if [[ -f "$CACHE" ]] && [[ "$(stat -c%s "$CACHE" 2>/dev/null || echo 0)" -gt 40000000 ]]; then
     info "使用已下载的 $CACHE"
 else

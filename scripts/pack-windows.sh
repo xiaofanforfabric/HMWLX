@@ -42,19 +42,19 @@ JRE_CACHE="dist/cache/temurin25-win-jre.zip"
 WANT_ZIP=false
 [[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
 
-# ---------------------------------------------------------------- 工具定位
+# ---------------------------------------------------------------- 定位 zig
 ZIG="${ZIG:-}"
 if [[ -z "$ZIG" ]]; then
   if command -v zig >/dev/null 2>&1; then
     ZIG="$(command -v zig)"
-  elif [[ -x /tmp/zig-linux-x86_64-0.13.0/zig ]]; then
-    ZIG=/tmp/zig-linux-x86_64-0.13.0/zig
+  elif [[ -x "$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig" ]]; then
+    ZIG="$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig"
   else
     echo "错误：找不到 zig。请设置 ZIG=/path/to/zig" >&2
+    echo "  或跑 ./scripts/install-zig.sh 自动装到 .tooling/zig" >&2
     exit 1
   fi
 fi
-echo "==> zig: $ZIG ($("$ZIG" version))"
 
 # ---------------------------------------------------------------- 依赖检查
 if [[ ! -f "$FAT_JAR" ]]; then
@@ -63,6 +63,7 @@ if [[ ! -f "$FAT_JAR" ]]; then
 fi
 echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
+echo "==> zig: $ZIG ($("$ZIG" version))"
 
 mkdir -p dist/cache
 
@@ -78,10 +79,11 @@ mkdir -p build/launcher
   launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
   -lcomctl32 \
   -o build/launcher/HMWLX-sfx.exe
-STUB_SIZE=$(stat -c%s build/launcher/HMWLX-sfx.exe)
+STUB="build/launcher/HMWLX-sfx.exe"
+STUB_SIZE=$(stat -c%s "$STUB")
 echo "    stub: $((STUB_SIZE / 1024)) KB"
 
-if ! file build/launcher/HMWLX-sfx.exe | grep -q "GUI"; then
+if ! file "$STUB" | grep -q "GUI"; then
   echo "错误：产物不是 GUI 子系统，双击会弹黑框" >&2
   exit 1
 fi
@@ -143,7 +145,7 @@ echo "    载荷: $(du -sh "$STAGE_DIR" | cut -f1) / $(find "$STAGE_DIR" -type f
 # ---------------------------------------------------------------- 合成 exe
 echo "==> LZMA 压缩并追加到 exe（较慢，约 1-3 分钟）"
 python3 scripts/make-sfx.py \
-  --stub build/launcher/HMWLX-sfx.exe \
+  --stub "$STUB" \
   --payload-dir "$STAGE_DIR" \
   --output "$EXE_OUT"
 

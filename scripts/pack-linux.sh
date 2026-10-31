@@ -62,15 +62,16 @@ for arg in "$@"; do
     esac
 done
 
-# ---------------------------------------------------------------- 工具定位
+# ---------------------------------------------------------------- 定位 zig
 ZIG="${ZIG:-}"
 if [[ -z "$ZIG" ]]; then
     if command -v zig >/dev/null 2>&1; then
         ZIG="$(command -v zig)"
-    elif [[ -x /tmp/zig-linux-x86_64-0.13.0/zig ]]; then
-        ZIG=/tmp/zig-linux-x86_64-0.13.0/zig
+    elif [[ -x "$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig" ]]; then
+        ZIG="$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig"
     else
         echo "错误：找不到 zig。请设 ZIG=/path/to/zig" >&2
+        echo "  或跑 ./scripts/install-zig.sh 自动装到 .tooling/zig" >&2
         exit 1
     fi
 fi
@@ -109,7 +110,6 @@ if [[ ! -f "$FAT_JAR" ]]; then
 fi
 echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
-
 echo "==> zig: $ZIG ($("$ZIG" version))"
 
 mkdir -p "$DIST_DIR"
@@ -124,14 +124,16 @@ mkdir -p build/launcher
 "$ZIG" cc -target x86_64-linux-gnu.2.31 -O2 -s -Wall \
     launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
     -o build/launcher/HMWLX-linux
-echo "    $(du -h build/launcher/HMWLX-linux | cut -f1)"
+STUB="build/launcher/HMWLX-linux"
+chmod 755 "$STUB"
+echo "    $(du -h "$STUB" | cut -f1)"
 
 # ---------------------------------------------------------------- 组装目录
 echo "==> 组装目录 $OUT_DIR"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-cp build/launcher/HMWLX-linux "$OUT_DIR/HMWLX"
+cp "$STUB" "$OUT_DIR/HMWLX"
 chmod 755 "$OUT_DIR/HMWLX"
 
 cp "$FAT_JAR" "$OUT_DIR/hmwlx.jar"
@@ -221,7 +223,7 @@ tar -C "$DIST_DIR" -czf "$TAR_OUT" "${APP_NAME}-linux-x64"
 #
 echo "==> 制作单文件自解压版（LZMA，较慢）"
 python3 scripts/make-sfx.py \
-    --stub build/launcher/HMWLX-linux \
+    --stub "$STUB" \
     --payload-dir "$OUT_DIR" \
     --output "$RUN_OUT"
 chmod 755 "$RUN_OUT"

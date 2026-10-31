@@ -152,10 +152,13 @@
 
             # zig：官方 tarball，0.13.0 是本地验证过的版本。
             #
-            # 用 install-zig.sh 而不是直接 tar 解压到 $HOME —— CNB 的
-            # $HOME 挂在不支持批量小文件的存储上，解压 zig（13000+
-            # 文件）会报 "Function not implemented" 并卡 3 分钟才失败。
-            # 脚本会自动探测可用位置（优先 /tmp）。
+            # 不直接 tar 解压：zig 解开是 16000+ 个小文件，CNB 的
+            # $HOME 和 /tmp 都是 overlay 挂载，批量创建随机报
+            # "Function not implemented" 并卡 3 分钟才失败。
+            #
+            # install-zig.sh 会按「项目目录 > /tmp > $HOME」的顺序探测，
+            # 默认装到 ./.tooling/zig —— 那是工作区真实盘，文件系统
+            # 语义正常，能容纳这种大量小文件的解压。
             ZIG_DIR="$(./scripts/install-zig.sh --path)"
             export PATH="$ZIG_DIR:$PATH"
             echo "zig: $(zig version)"
