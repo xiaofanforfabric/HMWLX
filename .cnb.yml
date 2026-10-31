@@ -124,11 +124,17 @@
 
             chmod +x ./gradlew scripts/*.sh scripts/*.py
 
-            # zig 来自镜像（docker/build-env.Dockerfile 里装在 /opt/zig），
-            # 这里只确认它能跑。不要再调 install-zig.sh —— 那套下载 + 解压
-            # 16000 个小文件的逻辑正是之前反复失败的原因。
-            echo "zig: $(zig version)"
-            echo "zig 路径: $(command -v zig)"
+            # 启动器编译器：Windows 用 mingw-w64，Linux 用 gcc，
+            # 两者都在镜像里（见 docker/build-env.Dockerfile）。
+            # 不再需要 zig，也就不再有「下载并解压 16000 个小文件」那一步。
+            for cc in x86_64-w64-mingw32-gcc gcc; do
+              command -v "$cc" >/dev/null 2>&1 || {
+                echo "错误：镜像里缺少 $cc，请检查 docker/build-env.Dockerfile" >&2
+                exit 1
+              }
+            done
+            echo "Windows 编译器: $(x86_64-w64-mingw32-gcc --version | head -1)"
+            echo "Linux 编译器:   $(gcc --version | head -1)"
 
             # 构建 fat jar（build.sh 会挑 JDK 25）
             ./scripts/build.sh --fast

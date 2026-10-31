@@ -65,15 +65,86 @@ fi
 echo "==> skiko $SKIKO_VERSION / 目标平台 $PLATFORM"
 
 # ---------------------------------------------------------------- 下载
+#
+# 为什么不用单个 repo1.maven.org：CI 节点经常吃 429。
+# Maven Central 对出口 IP 做并发限流，共享构建机的流量一大就把整个
+# 打包卡死 —— 日志里就是连续 4 次 curl: (22) ... 429。
+#
+# 所以按顺序试多个镜像，第一个成功的赢：
+#   1. $SKIKO_MIRROR_BASE  显式指定（可给多个，空格分隔，结尾不要 /）
+#   2. repo1.maven.org     Maven Central 官方
+#   3. maven.aliyun.com    阿里云，国内最快，CI 上通常不经 429
+#   4. repo.maven.apache.org  官方备用域名，限流策略与 repo1 独立
+#
+# 每次尝试后校验文件大小（> 1MB），防止把 429 的 HTML 错误页
+# 当成 jar 存下来 —— 那样会在后面 unzip 时谜之失败。
+#
 CACHE="dist/cache"
 mkdir -p "$CACHE"
 SKIKO_JAR="$CACHE/skiko-$PLATFORM-$SKIKO_VERSION.jar"
-SKIKO_URL="https://repo1.maven.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-$PLATFORM/$SKIKO_VERSION/skiko-awt-runtime-$PLATFORM-$SKIKO_VERSION.jar"
+SKIKO_PATH="org/jetbrains/skiko/skiko-awt-runtime-$PLATFORM/$SKIKO_VERSION/skiko-awt-runtime-$PLATFORM-$SKIKO_VERSION.jar"
 
-if [[ ! -f "$SKIKO_JAR" ]] || [[ "$(stat -c%s "$SKIKO_JAR")" -lt 1000000 ]]; then
+MIRRORS=()
+if [[ -n "${SKIKO_MIRROR_BASE:-}" ]]; then
+  # shellcheck disable=SC2206  # 故意按空白拆分
+  MIRRORS+=(${SKIKO_MIRROR_BASE})
+fi
+MIRRORS+=(
+  "https://repo1.maven.org/maven2"
+  "https://maven.aliyun.com/repository/public"
+  "https://repo.maven.apache.org/maven2"
+)
+
+MIN_BYTES=1000000
+
+if [[ -f "$SKIKO_JAR" ]] && [[ "$(stat -c%s "$SKIKO_JAR" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
+  echo "==> 使用已缓存的 skiko-$PLATFORM-$SKIKO_VERSION.jar"
+else
   echo "==> 下载 skiko-awt-runtime-$PLATFORM"
-  curl -L --fail --retry 3 -o "$SKIKO_JAR.part" "$SKIKO_URL"
-  mv "$SKIKO_JAR.part" "$SKIKO_JAR"
+  ok=0
+  for base in "${MIRRORS[@]}"; do
+    url="${base%/}/$SKIKO_PATH"
+    echo "    ← $base"
+
+    # 429 是「你太快了」，等一会再试比立刻换镜像更有效。
+    # 其它错误（404/域名不通）就立刻换。
+    for attempt in 1 2 3; do
+      if curl -fL -sS --connect-timeout 20 --max-time 300 \
+              -o "$SKIKO_JAR.part" "$url" 2>/tmp/skiko-curl.$$.log; then
+        if [[ "$(stat -c%s "$SKIKO_JAR.part" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
+          mv "$SKIKO_JAR.part" "$SKIKO_JAR"
+          ok=1
+          break 2
+        fi
+        echo "      文件太小（可能是错误页），换镜像"
+        break
+      else
+        # curl -f 的报错行形如：
+        #   curl: (22) The requested URL returned error: 429
+        # 用 -w 拿不到 4xx 的码（-f 会让 curl 直接返回 22），
+        # 所以从 stderr 里抠。抠不到就当 0，按普通失败处理。
+        code="$(grep -oE 'error: [0-9]{3}' /tmp/skiko-curl.$$.log 2>/dev/null \
+                | grep -oE '[0-9]{3}' | head -1)"
+        if [[ "${code:-0}" == "429" ]] && [[ $attempt -lt 3 ]]; then
+          wait_s=$((attempt * 5))
+          echo "      429 限流，${wait_s}s 后重试（第 $attempt/3 次）"
+          sleep "$wait_s"
+          continue
+        fi
+        echo "      失败（HTTP ${code:-?}），换镜像"
+        break
+      fi
+    done
+    rm -f "$SKIKO_JAR.part" /tmp/skiko-curl.$$.log
+  done
+
+  if [[ "$ok" -ne 1 ]]; then
+    rm -f /tmp/skiko-curl.$$.log
+    echo "错误：所有镜像都拿不到 skiko-$PLATFORM。" >&2
+    echo "  试过的：${MIRRORS[*]}" >&2
+    echo "  可以用 SKIKO_MIRROR_BASE=<前缀> 指定镜像。" >&2
+    exit 1
+  fi
 fi
 
 # ---------------------------------------------------------------- 解包
