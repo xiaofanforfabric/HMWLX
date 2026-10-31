@@ -106,9 +106,9 @@ done
 #
 # 放 $BUILD_ROOT/linux-stage（CNB 上是 data 卷 /build）：
 #   DEB 已改用 scripts/make-deb.py（纯 Python，不调外部 tar），
-#   RPM 的 rpmbuild 内部仍用 tar 遍历整个暂存树（runtime/ 几百个文件）。
-#   放在 /workspace（OverlayFS）上会报
-#     tar: ./opt/hmwlx/runtime/bin/java: Cannot stat: Function not implemented
+#   RPM 也不再走 %setup（同样不调 tar），改为 %install 里 cp -a。
+#   留在 data 卷的原因：rpmbuild 往 buildroot 里写几千个文件，
+#   放在 /workspace（OverlayFS）上仍有 stat/mkdir 的 ENOSYS 风险，
 #   而 data 卷是节点本地盘，没有这个限制。
 #
 # 做好的 .deb/.rpm 再拷回 dist/ —— 工作区只承载最终产物这几个大文件，
@@ -283,14 +283,21 @@ if [[ "$DO_RPM" == "true" ]]; then
         rm -rf "$RPM_TOP"
         mkdir -p "$RPM_TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
-        # --- 准备源码目录（不是 BUILDROOT）---
+        # --- 准备暂存目录 ---
         #
         # 关键：rpmbuild 会在 %install 之前**清空 BUILDROOT**。
         # 预先往 BUILDROOT 里塞文件等于白做 —— 会报
         # `cp: cannot stat '.../BUILDROOT/.'`。
         #
-        # 正确做法是：把要安装的内容打成 Source tar 包，
-        # 在 %install 里解到 %{buildroot}。这也是 RPM 的标准范式。
+        # 所以先把要安装的内容放到 STAGE 目录，%install 里
+        # `cp -a <STAGE>/. %{buildroot}/` 一次性拷进去。
+        #
+        # 这里【不再】把 STAGE 打成 tar.gz 让 %setup 解开。
+        # 原因：%setup 内部调 /usr/bin/tar，在 OverlayFS 上会报
+        #   tar: hmwlx-0.1.dev/opt/hmwlx/runtime/bin/java:
+        #        Cannot open: Function not implemented
+        # 而文件本来就已经摆好，打 tar 再解 tar 纯属多余 ——
+        # 直接用 %install 里的 cp -a 就够，少一次压缩 + 解压。
         RPM_STAGE="$RPM_TOP/stage/${PKG_NAME}-${RPM_VERSION}"
         rm -rf "$RPM_TOP/stage"
         mkdir -p "$RPM_STAGE/opt/${PKG_NAME}" \
@@ -323,14 +330,12 @@ DESKTOP
 
         cp "$ICON" "$RPM_STAGE/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png"
 
-        # 打 Source tar 包
-        tar -C "$RPM_TOP/stage" -czf "$RPM_TOP/SOURCES/${PKG_NAME}-${RPM_VERSION}.tar.gz" \
-            "${PKG_NAME}-${RPM_VERSION}"
-
         # --- spec ---
         # BuildArch: x86_64 —— 内置的 JRE 是平台相关的，不能标 noarch。
-        # %install 里什么都不做：文件已经在 BUILDROOT 里摆好了。
-        # 这是"预构建产物"打包的标准做法（类似 Go/Rust 二进制的打包方式）。
+        #
+        # 注意没有 Source0：不经过 %prep/%setup，%install 直接
+        # 从 STAGE 目录 cp -a 进 buildroot。这是"预构建产物"打包
+        # 的标准做法（类似 Go/Rust 二进制），也避开了 tar。
         cat > "$RPM_TOP/SPECS/${PKG_NAME}.spec" <<SPEC
 Name:           ${PKG_NAME}
 Version:        ${RPM_VERSION}
@@ -351,25 +356,23 @@ Requires:       libX11
 Requires:       fontconfig
 Requires:       freetype
 Requires:       mesa-libGL
-Source0:        %{name}-%{version}.tar.gz
 
 %description
 一个基于 headlessmc 的 Minecraft 启动器，内置 Java 运行时。
 用户无需单独安装 Java，安装后可从应用菜单启动。
 
 %prep
-# 解包预构建产物（里面是按最终路径摆好的目录树）。
-# -n 显式指定解包后的目录名，不依赖 rpm 的默认推导
-# （默认是 %{name}-%{version}，和我们生成的 tar 一致，写出来更明确）。
-%setup -q -n %{name}-%{version}
+# 什么都不做：不走 Source0 + %setup。
+# %setup 会调外部 tar，在 OverlayFS 上必报 ENOSYS。
+# 文件树已经由 pack-linux-formats.sh 准备好，%install 直接拷。
 
 %build
 # 预构建产物，无需编译
 
 %install
-# 把解包出来的整棵目录树拷进 buildroot。
-# 用 -a 保留符号链接（/usr/bin/hmwlx 是软链）。
-cp -a . %{buildroot}/
+# 把暂存目录的整棵文件树拷进 buildroot。
+# -a 保留符号链接（/usr/bin/hmwlx 是软链）和权限。
+cp -a "$STAGE_DIR"/. %{buildroot}/
 
 %post
 if [ -x /usr/bin/update-desktop-database ]; then
@@ -400,13 +403,18 @@ SPEC
         # --define "_topdir"：把 rpmbuild 的工作目录指到暂存目录，
         # 不污染 ~/rpmbuild —— 构建脚本不该往用户主目录写东西。
         #
-        # 注意 RPM_TOP 现在是**绝对路径**（在 $TMPDIR 下），不能再像
-        # 以前那样拼 $(pwd)/ 前缀 —— 那会拼成
+        # 注意 RPM_TOP 必须是**绝对路径**，不能再像以前那样拼
+        # $(pwd)/ 前缀 —— 那会拼成
         #   /mnt/A/HMYLX//tmp/hmwlx-stage-xxx/rpmbuild
-        # rpmbuild 找不到 Source0，报 "Bad source"。
+        # rpmbuild 就找不到 spec 里的路径了。
+        #
+        # STAGE_DIR 通过 --define 传进 spec：%install 里用
+        # `cp -a "$STAGE_DIR"/.` 把文件树拷进 buildroot，
+        # 不经过 Source0 + %setup，因此全程不调 tar。
         if rpmbuild -bb \
                 --define "_topdir ${RPM_TOP}" \
                 --define "_build_id_links none" \
+                --define "STAGE_DIR ${RPM_STAGE}" \
                 "$RPM_TOP/SPECS/${PKG_NAME}.spec" > "$RPM_TOP/build.log" 2>&1; then
             RPM_OUT=$(find "$RPM_TOP/RPMS" -name "*.rpm" | head -1)
             if [[ -n "$RPM_OUT" ]]; then
