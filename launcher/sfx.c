@@ -794,22 +794,56 @@ static int launch_jvm(const char *root, int argc, char **argv)
     args[k] = NULL;
 
 #ifdef _WIN32
-    /* 拼完整命令行（带引号转义） */
-    size_t cap = 32768;
+    /*
+     * 拼命令行。必须严格按 MS C 运行库（CommandLineToArgvW）的反解析规则，
+     * 否则参数会被拆错或路径里的反斜杠被吃掉。
+     *
+     * 规则（只对「带引号的参数」生效）：
+     *   - 连续的 N 个反斜杠后面跟一个引号  ->  输出 2N 个反斜杠 + 一个引号
+     *   - 连续的 N 个反斜杠后面跟普通字符  ->  原样输出 N 个反斜杠
+     *   - 连续的 N 个反斜杠在参数结尾      ->  原样输出 N 个反斜杠
+     *
+     * 这里踩过一个坑：早先的代码无脑给每个 '\\' 都再补一个 '\\'，
+     * 结果 C:\Users\... 变成了 C:\\Users\\...，JVM 直接找不到 jar
+     * （日志里那行「命令行: C:\\Users\\...」就是这么来的）。
+     * 反斜杠只有在「紧邻引号」时才需要翻倍。
+     */
+    size_t cap = 65536;
     char *cmd = (char *)calloc(cap, 1);
     if (!cmd) { free(args); show_error("内存不足。"); return 4; }
     size_t used = 0;
+
     for (int i = 0; args[i]; i++) {
         const char *a = args[i];
-        int quote = (a[0] == '\0' || strpbrk(a, " \t\"") != NULL);
-        if (used + strlen(a) * 2 + 8 >= cap) break;
         if (i) cmd[used++] = ' ';
-        if (quote) cmd[used++] = '"';
-        for (const char *p = a; *p; p++) {
-            if (*p == '"' || *p == '\\') cmd[used++] = '\\';
-            cmd[used++] = *p;
+
+        int need_quote = (*a == '\0' || strpbrk(a, " \t") != NULL);
+        if (need_quote) cmd[used++] = '"';
+
+        const char *p = a;
+        while (*p) {
+            /* 数一下当前这段连续反斜杠 */
+            size_t nbs = 0;
+            while (*p == '\\') { nbs++; p++; }
+
+            if (*p == '\0') {
+                /* 反斜杠在参数结尾：
+                 * 带引号时要翻倍（否则会把收尾的引号转义掉），不带则原样 */
+                size_t emit = need_quote ? nbs * 2 : nbs;
+                for (size_t k = 0; k < emit; k++) cmd[used++] = '\\';
+            } else if (*p == '"') {
+                /* 反斜杠后跟引号：反斜杠翻倍，引号转义 */
+                for (size_t k = 0; k < nbs * 2 + 1; k++) cmd[used++] = '\\';
+                cmd[used++] = '"';
+                p++;
+            } else {
+                /* 普通字符：反斜杠原样 */
+                for (size_t k = 0; k < nbs; k++) cmd[used++] = '\\';
+                cmd[used++] = *p++;
+            }
         }
-        if (quote) cmd[used++] = '"';
+
+        if (need_quote) cmd[used++] = '"';
     }
     cmd[used] = '\0';
 
@@ -847,7 +881,39 @@ static int launch_jvm(const char *root, int argc, char **argv)
     free(wcmd);
     free(args);
 
-    /* 不等它：启动器退出后游戏继续跑 */
+    /*
+     * CreateProcessW 成功只代表进程被创建出来了，不代表 JVM 起来了。
+     * javaw.exe 如果找不到 jar 或参数有问题，会在几百毫秒内自己退出，
+     * 而启动器早就返回了 —— 用户看到的就是「双击没反应」。
+     *
+     * 所以这里等最多 3 秒：
+     *   - 进程还活着  -> 正常，说明 JVM 在跑（GUI 起来要几秒）
+     *   - 进程已退出  -> 立刻把退出码弹出来，别让人瞎猜
+     *
+     * 3 秒后无论死活都直接关闭句柄返回，不拖住用户。
+     */
+    DWORD wr = WaitForSingleObject(pi.hProcess, 3000);
+    if (wr == WAIT_OBJECT_0) {
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        char msg[2600];
+        snprintf(msg, sizeof(msg),
+                 "Java 进程启动后立即退出（退出码 %lu）。\n\n"
+                 "常见原因：\n"
+                 "  · 运行时文件不完整（解压中断或被杀毒软件拦截）\n"
+                 "  · 显卡驱动不兼容（已强制软件渲染，通常不是这个）\n\n"
+                 "详细信息见日志：\n%%LOCALAPPDATA%%\\HMWLX\\launcher.log",
+                 (unsigned long)code);
+        logmsg("错误：JVM 进程提前退出，退出码 %lu\n", (unsigned long)code);
+        show_error(msg);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return 7;
+    }
+
+    logmsg("JVM 进程已启动%s\n",
+           wr == WAIT_TIMEOUT ? "（3 秒内未退出，判定正常）" : "");
+
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 0;
