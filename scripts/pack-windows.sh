@@ -90,6 +90,73 @@ mkdir -p "$STAGE_DIR"
 
 cp "$FAT_JAR" "$STAGE_DIR/hmwlx.jar"
 
+# ---------------------------------------------------------------- 换 skiko
+#
+# 这一步是必须的，否则 Windows 上直接崩：
+#
+#   org.jetbrains.skiko.LibraryLoadException:
+#     Cannot find skiko-windows-x64.dll.sha256, proper native dependency missing.
+#
+# 原因：build.gradle 里写的是 compose.desktop.currentOs，
+# 它按【构建机】挑平台的 skiko 原生库。我们在 Linux 上构建，
+# fat jar 里只有 libskiko-linux-x64.so，Windows 上自然找不到 DLL。
+#
+# Compose 的 Skia 渲染必须靠这个原生库，没有它 GUI 起不来。
+# 所以这里把 Windows 版的 skiko runtime 下载下来，替换掉 jar 里的
+# Linux 版本 —— 顺带删掉 29MB 的 .so，包还能小一点。
+#
+SKIKO_VERSION="0.9.37.3"
+SKIKO_WIN_CACHE="dist/cache/skiko-windows-x64-${SKIKO_VERSION}.jar"
+SKIKO_WIN_URL="https://repo1.maven.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-windows-x64/${SKIKO_VERSION}/skiko-awt-runtime-windows-x64-${SKIKO_VERSION}.jar"
+
+if [[ ! -f "$SKIKO_WIN_CACHE" ]] || [[ "$(stat -c%s "$SKIKO_WIN_CACHE")" -lt 1000000 ]]; then
+  echo "==> 下载 Windows 版 skiko 原生库"
+  curl -L --fail --retry 3 -o "$SKIKO_WIN_CACHE.part" "$SKIKO_WIN_URL"
+  mv "$SKIKO_WIN_CACHE.part" "$SKIKO_WIN_CACHE"
+else
+  echo "==> 使用缓存的 skiko ($(du -h "$SKIKO_WIN_CACHE" | cut -f1))"
+fi
+
+echo "==> 替换 jar 内的 skiko 原生库（Linux -> Windows）"
+SKIKO_TMP="$(mktemp -d)"
+if unzip -q "$SKIKO_WIN_CACHE" -d "$SKIKO_TMP" 2>/dev/null; then
+  for need in skiko-windows-x64.dll skiko-windows-x64.dll.sha256 icudtl.dat; do
+    [[ -f "$SKIKO_TMP/$need" ]] || { echo "错误：skiko 包缺少 $need" >&2; exit 1; }
+  done
+
+  # 先删掉 Linux 的原生库，再把 Windows 的塞进去。
+  # 注意不要动 META-INF/MANIFEST.MF —— 启动器用 -jar 启动，
+  # 全靠它里面的 Main-Class。删了就会报「无法加载主类」。
+  zip -qd "$STAGE_DIR/hmwlx.jar" \
+      'libskiko-linux-x64.so' \
+      'libskiko-linux-x64.so.sha256' 2>/dev/null || true
+
+  ( cd "$SKIKO_TMP" && zip -q -X "$OLDPWD/$STAGE_DIR/hmwlx.jar" \
+      skiko-windows-x64.dll skiko-windows-x64.dll.sha256 icudtl.dat )
+
+  echo "    已嵌入: $(du -h "$SKIKO_TMP/skiko-windows-x64.dll" | cut -f1) DLL + $(du -h "$SKIKO_TMP/icudtl.dat" | cut -f1) icudtl"
+else
+  echo "错误：skiko jar 解压失败" >&2
+  exit 1
+fi
+rm -rf "$SKIKO_TMP"
+
+# 校验：必须有 Windows DLL，不能残留 Linux 的
+if ! unzip -l "$STAGE_DIR/hmwlx.jar" | grep -q 'skiko-windows-x64.dll'; then
+  echo "错误：替换后 jar 内仍无 skiko-windows-x64.dll" >&2
+  exit 1
+fi
+if unzip -l "$STAGE_DIR/hmwlx.jar" | grep -q 'libskiko-linux-x64.so$'; then
+  echo "警告：jar 内仍残留 Linux skiko 库" >&2
+fi
+
+# MANIFEST 必须还在：启动器用 -jar 启动，靠它找 Main-Class
+if ! unzip -p "$STAGE_DIR/hmwlx.jar" META-INF/MANIFEST.MF 2>/dev/null | grep -qi 'Main-Class'; then
+  echo "错误：jar 内 META-INF/MANIFEST.MF 缺失或没有 Main-Class" >&2
+  exit 1
+fi
+echo "    jar 现为 $(du -h "$STAGE_DIR/hmwlx.jar" | cut -f1)"
+
 if [[ ! -f "$JRE_CACHE" ]] || [[ "$(stat -c%s "$JRE_CACHE")" -lt 20000000 ]]; then
   echo "==> 下载 Windows JRE (Temurin 25)"
   curl -L --fail --retry 3 -o "$JRE_CACHE.part" "$JRE_URL"
