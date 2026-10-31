@@ -148,18 +148,17 @@
                 libXtst libXext libXrandr fontconfig dejavu-sans-fonts
             fi
 
-            # zig：官方 tarball，0.13.0 是本地验证过的版本
-            ZIG_VERSION=0.13.0
-            if ! command -v zig >/dev/null 2>&1; then
-              curl -fsSL -o /tmp/zig.tar.xz \
-                "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-              mkdir -p "$HOME/.local/opt"
-              tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/opt"
-              export PATH="$HOME/.local/opt/zig-linux-x86_64-${ZIG_VERSION}:$PATH"
-            fi
-            echo "zig: $(zig version)"
-
             chmod +x ./gradlew scripts/*.sh scripts/*.py
+
+            # zig：官方 tarball，0.13.0 是本地验证过的版本。
+            #
+            # 用 install-zig.sh 而不是直接 tar 解压到 $HOME —— CNB 的
+            # $HOME 挂在不支持批量小文件的存储上，解压 zig（13000+
+            # 文件）会报 "Function not implemented" 并卡 3 分钟才失败。
+            # 脚本会自动探测可用位置（优先 /tmp）。
+            ZIG_DIR="$(./scripts/install-zig.sh --path)"
+            export PATH="$ZIG_DIR:$PATH"
+            echo "zig: $(zig version)"
 
             # 构建 fat jar（build.sh 会挑 JDK 25）
             ./scripts/build.sh --fast

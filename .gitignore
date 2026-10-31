@@ -45,3 +45,6 @@ bin/
 # Python 字节码（scripts/*.py 产生的）
 __pycache__/
 *.pyc
+
+# 本地/CI 下载的工具链（scripts/install-zig.sh 可能会用）
+.tooling/

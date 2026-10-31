@@ -198,12 +198,11 @@ jobs:
         # action 的维护状态。0.13.0 是本地验证过的版本。
         run: |
           set -euo pipefail
-          ZIG_VERSION=0.13.0
-          curl -fsSL -o /tmp/zig.tar.xz \
-            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-          mkdir -p "$HOME/.local/opt"
-          tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/opt"
-          echo "$HOME/.local/opt/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          # 用 install-zig.sh 统一逻辑：它会先探测目录能不能容纳
+          # 13000+ 小文件（CNB 的 $HOME 就不行），再选位置解压。
+          chmod +x scripts/install-zig.sh
+          ZIG_DIR="$(./scripts/install-zig.sh --path)"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: 构建 fat jar
         run: |
