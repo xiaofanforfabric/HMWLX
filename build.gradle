@@ -15,7 +15,11 @@ plugins {
 }
 
 group = 'org.cn.xiaofan'
-version = '1.0-SNAPSHOT'
+
+// 版本号唯一来自 gradle.properties 的 appVersion。
+// 不要在这里写死 —— 打包脚本（scripts/pack-*.sh）也读同一个值，
+// 两边不一致会导致脚本找不到 jar（文件名带版本号）。
+version = (findProperty('appVersion') ?: '0.1-dev').toString()
 
 // headlessmc 要求 JVM 25+
 def javaTarget = Integer.parseInt((findProperty('javaVersion') ?: '25').toString())

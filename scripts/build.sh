@@ -107,7 +107,9 @@ if [[ "$DO_CLEAN" == "1" ]]; then
     echo
 fi
 
-TASKS=(build)
+# build 负责编译 + 测试 + 常规 jar；fatJar 额外产出带全部依赖的可执行 jar。
+# 两个都要：打包脚本（pack-*.sh）读的是 fatJar 的产物。
+TASKS=(build fatJar)
 
 # ---------------------------------------------------------------------------
 # 构建
@@ -128,6 +130,16 @@ if [[ -d build/quarkus-app ]]; then
 fi
 if compgen -G "build/libs/*.jar" > /dev/null; then
     for jar in build/libs/*.jar; do
-        echo "普通 JAR:  $jar  ($(du -h "$jar" | cut -f1)，不含依赖，不可直接运行)"
+        # 区分三种产物，别混着说「不可直接运行」：
+        #   *-all.jar   fat jar，java -jar 就能跑
+        #   其它        普通 jar，缺依赖，不能单独运行
+        case "$jar" in
+            *-all.jar)
+                echo "fat JAR:   $jar  ($(du -h "$jar" | cut -f1)，可 java -jar 直接运行)"
+                ;;
+            *)
+                echo "普通 JAR:  $jar  ($(du -h "$jar" | cut -f1)，不含依赖，不可直接运行)"
+                ;;
+        esac
     done
 fi

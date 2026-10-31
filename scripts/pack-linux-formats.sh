@@ -36,7 +36,14 @@ cd "$(dirname "$(readlink -f "$0")")/.."
 
 APP_NAME="HMWLX"
 PKG_NAME="hmwlx"          # DEB 包名必须全小写（Debian 政策）
-VERSION="1.0.0"
+
+# 版本号唯一来源：gradle.properties 的 appVersion。
+# 提供 APP_VERSION（原始，如 0.1-dev）、
+#     DEB_VERSION（0.1~dev，Debian 用 ~ 表示预发布，排序低于正式版）、
+#     RPM_VERSION（0.1.dev，RPM 版本字段不允许连字符）。
+# shellcheck source=./version.sh
+source "$PWD/scripts/version.sh"
+
 MAINTAINER="xiaofan <xiaofan@cn.xiaofan>"
 HOMEPAGE="https://cnb.cool/xiaofanforandroid/HMWLX/HMWLX"
 DESCRIPTION="Minecraft 启动器（HMWLX）"
@@ -77,7 +84,7 @@ done
 # 1. DEB
 #
 # 结构（Debian 政策）：
-#   hmwlx_1.0.0_amd64/
+#   hmwlx_${DEB_VERSION}_amd64/
 #   ├── DEBIAN/control            元数据
 #   ├── DEBIAN/postinst           装完后刷新桌面数据库
 #   ├── DEBIAN/postrm             卸载后刷新
@@ -170,7 +177,7 @@ DESKTOP
         #
         cat > "$DEB_ROOT/DEBIAN/control" <<CONTROL
 Package: ${PKG_NAME}
-Version: ${VERSION}
+Version: ${DEB_VERSION}
 Section: games
 Priority: optional
 Architecture: amd64
@@ -208,7 +215,7 @@ HOOK
         chmod 755 "$DEB_ROOT/DEBIAN"
         chmod 644 "$DEB_ROOT/DEBIAN/control"
 
-        DEB_OUT="${DIST_DIR}/${PKG_NAME}_${VERSION}_amd64.deb"
+        DEB_OUT="${DIST_DIR}/${PKG_NAME}_${DEB_VERSION}_amd64.deb"
         dpkg-deb --root-owner-group -Zxz --build "$DEB_ROOT" "$DEB_OUT" >/dev/null
         echo "   $DEB_OUT  ($(du -h "$DEB_OUT" | cut -f1))"
     fi
@@ -252,7 +259,7 @@ if [[ "$DO_RPM" == "true" ]]; then
         #
         # 正确做法是：把要安装的内容打成 Source tar 包，
         # 在 %install 里解到 %{buildroot}。这也是 RPM 的标准范式。
-        RPM_STAGE="$RPM_TOP/stage/${PKG_NAME}-${VERSION}"
+        RPM_STAGE="$RPM_TOP/stage/${PKG_NAME}-${RPM_VERSION}"
         rm -rf "$RPM_TOP/stage"
         mkdir -p "$RPM_STAGE/opt/${PKG_NAME}" \
                  "$RPM_STAGE/usr/bin" \
@@ -285,8 +292,8 @@ DESKTOP
         cp "$ICON" "$RPM_STAGE/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png"
 
         # 打 Source tar 包
-        tar -C "$RPM_TOP/stage" -czf "$RPM_TOP/SOURCES/${PKG_NAME}-${VERSION}.tar.gz" \
-            "${PKG_NAME}-${VERSION}"
+        tar -C "$RPM_TOP/stage" -czf "$RPM_TOP/SOURCES/${PKG_NAME}-${RPM_VERSION}.tar.gz" \
+            "${PKG_NAME}-${RPM_VERSION}"
 
         # --- spec ---
         # BuildArch: x86_64 —— 内置的 JRE 是平台相关的，不能标 noarch。
@@ -294,7 +301,7 @@ DESKTOP
         # 这是"预构建产物"打包的标准做法（类似 Go/Rust 二进制的打包方式）。
         cat > "$RPM_TOP/SPECS/${PKG_NAME}.spec" <<SPEC
 Name:           ${PKG_NAME}
-Version:        ${VERSION}
+Version:        ${RPM_VERSION}
 Release:        1%{?dist}
 Summary:        ${DESCRIPTION}
 License:        Proprietary
@@ -319,8 +326,10 @@ Source0:        %{name}-%{version}.tar.gz
 用户无需单独安装 Java，安装后可从应用菜单启动。
 
 %prep
-# 解包预构建产物（里面是按最终路径摆好的目录树）
-%setup -q
+# 解包预构建产物（里面是按最终路径摆好的目录树）。
+# -n 显式指定解包后的目录名，不依赖 rpm 的默认推导
+# （默认是 %{name}-%{version}，和我们生成的 tar 一致，写出来更明确）。
+%setup -q -n %{name}-%{version}
 
 %build
 # 预构建产物，无需编译
@@ -450,7 +459,7 @@ StartupWMClass=HMWLX
 DESKTOP
         cp "$APPDIR/${PKG_NAME}.desktop" "$APPDIR/usr/share/applications/"
 
-        APPIMAGE_OUT="${DIST_DIR}/${APP_NAME}-${VERSION}-x86_64.AppImage"
+        APPIMAGE_OUT="${DIST_DIR}/${APP_NAME}-${APP_VERSION}-x86_64.AppImage"
         # --no-appstream：不生成 AppStream 元数据。
         # 那需要额外的 appstream-util 和元数据文件，对自用分发没必要，
         # 缺了它 appimagetool 会报 warning 但不影响产物可用性。
@@ -465,6 +474,6 @@ echo ""
 echo "=== 完成 ==="
 ls -lh "${DIST_DIR}"/*.deb "${DIST_DIR}"/*.AppImage 2>/dev/null || true
 echo ""
-echo "DEB 安装   : sudo apt install ./${DIST_DIR}/${PKG_NAME}_${VERSION}_amd64.deb"
+echo "DEB 安装   : sudo apt install ./${DIST_DIR}/${PKG_NAME}_${DEB_VERSION}_amd64.deb"
 echo "DEB 卸载   : sudo apt remove ${PKG_NAME}"
-echo "AppImage   : chmod +x ${DIST_DIR}/${APP_NAME}-${VERSION}-x86_64.AppImage && ./${DIST_DIR}/${APP_NAME}-${VERSION}-x86_64.AppImage"
+echo "AppImage   : chmod +x ${DIST_DIR}/${APP_NAME}-${APP_VERSION}-x86_64.AppImage && ./${DIST_DIR}/${APP_NAME}-${APP_VERSION}-x86_64.AppImage"

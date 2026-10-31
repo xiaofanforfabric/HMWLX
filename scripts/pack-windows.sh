@@ -29,10 +29,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-1.0.0}"
+# 版本号唯一来源：gradle.properties 的 appVersion。
+# 同时提供 $FAT_JAR（根据版本拼出的构建产物路径）。
+# shellcheck source=./version.sh
+source "$ROOT/scripts/version.sh"
 STAGE_DIR="build/win-payload"          # 待嵌入的目录（exe 内不含这个结构）
-EXE_OUT="dist/HMWLX-${VERSION}-win-x64.exe"
-ZIP_OUT="dist/HMWLX-${VERSION}-win-x64.zip"
+EXE_OUT="dist/HMWLX-${APP_VERSION}-win-x64.exe"
+ZIP_OUT="dist/HMWLX-${APP_VERSION}-win-x64.zip"
 JRE_URL="https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_windows_hotspot_25.0.5_8.zip"
 JRE_CACHE="dist/cache/temurin25-win-jre.zip"
 
@@ -54,11 +57,11 @@ fi
 echo "==> zig: $ZIG ($("$ZIG" version))"
 
 # ---------------------------------------------------------------- 依赖检查
-FAT_JAR="build/libs/hmwlx-1.0-SNAPSHOT-all.jar"
 if [[ ! -f "$FAT_JAR" ]]; then
-  echo "错误：$FAT_JAR 不存在，请先运行 ./scripts/build.sh 或 ./gradlew fatJar" >&2
+  echo "错误：找不到 fat jar，请先运行 ./scripts/build.sh 或 ./gradlew fatJar" >&2
   exit 1
 fi
+echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
 
 mkdir -p dist/cache

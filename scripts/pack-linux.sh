@@ -38,13 +38,19 @@
 set -euo pipefail
 
 # 脚本在 scripts/ 下，项目根目录是它上一级
-cd "$(dirname "$(readlink -f "$0")")/.."
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+cd "$ROOT"
 
 APP_NAME="HMWLX"
-VERSION="${VERSION:-1.0.0}"
 DIST_DIR="dist"
+
+# 版本号唯一来源：gradle.properties 的 appVersion。
+# 同时提供 $FAT_JAR（根据版本拼出的构建产物路径）。
+# shellcheck source=./version.sh
+source "$ROOT/scripts/version.sh"
+
 OUT_DIR="${DIST_DIR}/${APP_NAME}-linux-x64"
-RUN_OUT="${DIST_DIR}/${APP_NAME}-${VERSION}-linux-x64.run"
+RUN_OUT="${DIST_DIR}/${APP_NAME}-${APP_VERSION}-linux-x64.run"
 TAR_OUT="${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz"
 
 SKIP_JRE=false
@@ -93,11 +99,11 @@ find_jdk25() {
 }
 
 # ---------------------------------------------------------------- 依赖检查
-FAT_JAR="build/libs/hmwlx-1.0-SNAPSHOT-all.jar"
 if [[ ! -f "$FAT_JAR" ]]; then
-    echo "错误：$FAT_JAR 不存在，请先跑 ./scripts/build.sh 或 ./gradlew fatJar" >&2
+    echo "错误：找不到 fat jar，请先跑 ./scripts/build.sh 或 ./gradlew fatJar" >&2
     exit 1
 fi
+echo "==> 版本: $APP_VERSION"
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
 
 echo "==> zig: $ZIG ($("$ZIG" version))"
