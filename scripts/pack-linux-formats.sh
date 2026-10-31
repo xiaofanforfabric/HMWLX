@@ -7,13 +7,13 @@
 #   dist/hmwlx-<版本>-1.x86_64.rpm     Fedora/RHEL/openSUSE 安装包
 #   dist/HMWLX-<版本>-x86_64.AppImage  单文件便携版
 #
-# 前置：先跑 ./pack-linux.sh
+# 前置：先跑 ./scripts/pack-linux.sh
 #
 # 用法：
-#   ./pack-linux-formats.sh
-#   ./pack-linux-formats.sh --deb-only
-#   ./pack-linux-formats.sh --rpm-only
-#   ./pack-linux-formats.sh --appimage-only
+#   ./scripts/pack-linux-formats.sh
+#   ./scripts/pack-linux-formats.sh --deb-only
+#   ./scripts/pack-linux-formats.sh --rpm-only
+#   ./scripts/pack-linux-formats.sh --appimage-only
 #
 # ---------------------------------------------------------------------------
 # 两种格式的定位差异（这不是可选项，是用户预期）
@@ -29,7 +29,8 @@
 #
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 APP_NAME="HMWLX"
 PKG_NAME="hmwlx"          # DEB 包名必须全小写（Debian 政策）
@@ -56,7 +57,7 @@ esac
 # ---------------------------------------------------------------------------
 if [[ ! -d "$SRC_DIR" ]]; then
     echo "错误：找不到 $SRC_DIR" >&2
-    echo "请先运行 ./pack-linux.sh" >&2
+    echo "请先运行 ./scripts/pack-linux.sh" >&2
     exit 1
 fi
 

@@ -4,15 +4,15 @@
 # 让「本地绿 → 远端绿」成为可靠的预期，而不是碰运气。
 #
 # 用法：
-#   ./test.sh              跑全部测试（默认，等同 CI 的 test job）
-#   ./test.sh --build      测试 + 构建（等同 CI 的 build job）
-#   ./test.sh --clean      先 clean 再跑
-#   ./test.sh --fast       只编译，不跑测试
-#   ./test.sh --verbose    打印完整 Gradle 输出
-#   ./test.sh --help       看用法
+#   ./scripts/test.sh              跑全部测试（默认，等同 CI 的 test job）
+#   ./scripts/test.sh --build      测试 + 构建（等同 CI 的 build job）
+#   ./scripts/test.sh --clean      先 clean 再跑
+#   ./scripts/test.sh --fast       只编译，不跑测试
+#   ./scripts/test.sh --verbose    打印完整 Gradle 输出
+#   ./scripts/test.sh --help       看用法
 #
 # 退出码：0 表示全部通过，非 0 表示有失败 —— 可以直接用在
-#   `./test.sh && git push` 这类串联命令里。
+#   `./scripts/test.sh && git push` 这类串联命令里。
 #
 # ---------------------------------------------------------------------------
 # 为什么脚本里的命令和 CI 有细微差别
@@ -43,7 +43,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 # ---------------------------------------------------------------------------
 # JDK 25
@@ -87,7 +88,7 @@ CI 用的是 eclipse-temurin:25，本地需要 JDK 25 才能跑测试
 （headlessmc 的 class 文件版本是 69，JDK 17 只能认到 61）。
 
 可以用环境变量指定：
-    HMYLX_JAVA_HOME=/path/to/jdk25 ./test.sh
+    HMYLX_JAVA_HOME=/path/to/jdk25 ./scripts/test.sh
 MSG
     exit 1
 }
@@ -226,7 +227,7 @@ echo "=== 结果 ==="
 if [[ "$FAST" != "1" ]] && grep -qE ':test UP-TO-DATE|:test FROM-CACHE' /tmp/hmylx-test.log 2>/dev/null; then
     echo "⚠️  :test 任务被跳过（输入未变，复用了上次结果）"
     echo "    下面的数字来自上一次运行，不是这次真实执行的结果。"
-    echo "    要强制真跑一遍：./test.sh --clean"
+    echo "    要强制真跑一遍：./scripts/test.sh --clean"
     echo ""
 fi
 
@@ -273,7 +274,7 @@ else
     echo "❌ 失败（退出码 $EXIT_CODE）"
     if [[ "$VERBOSE" != "1" && -f /tmp/hmylx-test.log ]]; then
         echo "   完整输出: /tmp/hmylx-test.log"
-        echo "   或重跑:   ./test.sh --verbose"
+        echo "   或重跑:   ./scripts/test.sh --verbose"
     fi
 fi
 

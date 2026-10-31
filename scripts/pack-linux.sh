@@ -7,8 +7,8 @@
 #   dist/HMWLX-linux-x64.tar.gz        ← 上面那个目录的压缩包
 #
 # 用法：
-#   ./pack-linux.sh             正常打包
-#   ./pack-linux.sh --skip-jre  复用已有的精简 JRE（迭代调样式时省时间）
+#   ./scripts/pack-linux.sh             正常打包
+#   ./scripts/pack-linux.sh --skip-jre  复用已有的精简 JRE（迭代调样式时省时间）
 #
 # ---------------------------------------------------------------------------
 # 为什么不能直接用 jpackage
@@ -30,7 +30,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$(readlink -f "$0")")"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 APP_NAME="HMWLX"
 BUILD_DIR="build/quarkus-app"
@@ -70,7 +71,7 @@ JDK="$(find_jdk25)" || {
 echo "JDK: $JDK ($("$JDK/bin/java" -version 2>&1 | head -1))"
 
 if [[ ! -d "$BUILD_DIR" ]]; then
-    echo "❌ 找不到 $BUILD_DIR，请先跑 ./build.sh" >&2
+    echo "❌ 找不到 $BUILD_DIR，请先跑 ./scripts/build.sh" >&2
     exit 1
 fi
 

@@ -1,30 +1,43 @@
 #!/usr/bin/env bash
 #
-# HMWLX Windows 便携包打包脚本
+# HMWLX Windows 单文件打包脚本
 #
-# 产物：dist/HMWLX-<ver>-win-x64.zip
+# 产物：dist/HMWLX-<ver>-win-x64.exe   ← 一个文件，双击即用
 #
-# 结构：
-#   HMWLX/
-#   ├── HMWLX.exe      原生启动器（zig 交叉编译，~37KB）
-#   ├── hmwlx.jar      fat jar（~120MB，含全部依赖）
-#   └── runtime/       Windows JRE（Temurin 25，~90MB）
+# 原理：
+#   launcher/sfx.c 编译出的启动器 exe，在文件末尾追加 LZMA 压缩的
+#   runtime/ 和 hmwlx.jar。启动时先解压到
+#     %LOCALAPPDATA%\HMWLX\app\<指纹>\
+#   再启动 JVM。已解压过就直接启动（有 .extracted 标记）。
+#
+# 与之前 ZIP 方案的区别：
+#   旧方案给用户一个 167MB 的 zip，要手动解压、还得保证三个文件
+#   相对位置不变。现在是一个 exe，双击就行。
 #
 # 前置：
 #   - 已执行 ./gradlew fatJar
 #   - zig 位于 $ZIG 或 /tmp/zig-linux-x86_64-0.13.0/zig
 #   - 需代理下载 JRE：export https_proxy=http://127.0.0.1:7890
 #
+# 用法：
+#   ./scripts/pack-windows.sh             单文件 exe（默认）
+#   ./scripts/pack-windows.sh --zip       额外再出一个便携 zip
+#
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 脚本在 scripts/ 下，项目根目录是它上一级
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${VERSION:-1.0.0}"
-OUT_DIR="dist/HMWLX-win-x64"
+STAGE_DIR="build/win-payload"          # 待嵌入的目录（exe 内不含这个结构）
+EXE_OUT="dist/HMWLX-${VERSION}-win-x64.exe"
 ZIP_OUT="dist/HMWLX-${VERSION}-win-x64.zip"
 JRE_URL="https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_windows_hotspot_25.0.5_8.zip"
 JRE_CACHE="dist/cache/temurin25-win-jre.zip"
+
+WANT_ZIP=false
+[[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
 
 # ---------------------------------------------------------------- 工具定位
 ZIG="${ZIG:-}"
@@ -43,27 +56,39 @@ echo "==> zig: $ZIG ($("$ZIG" version))"
 # ---------------------------------------------------------------- 依赖检查
 FAT_JAR="build/libs/hmwlx-1.0-SNAPSHOT-all.jar"
 if [[ ! -f "$FAT_JAR" ]]; then
-  echo "错误：$FAT_JAR 不存在，请先运行 ./gradlew fatJar" >&2
+  echo "错误：$FAT_JAR 不存在，请先运行 ./scripts/build.sh 或 ./gradlew fatJar" >&2
   exit 1
 fi
 echo "==> fat jar: $(du -h "$FAT_JAR" | cut -f1)"
 
-# ---------------------------------------------------------------- 清理输出
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR" dist/cache
+mkdir -p dist/cache
 
-# ---------------------------------------------------------------- 编译启动器
-echo "==> 编译 Windows 启动器"
-"$ZIG" cc -target x86_64-windows-gnu -O2 -s \
+# ---------------------------------------------------------------- 编译 stub
+#
+# -Wl,--subsystem,windows 让产物是 GUI 子系统，双击不弹黑框。
+# zig 不认 gcc 的 -mwindows（只会警告 argument unused）。
+#
+echo "==> 编译自解压启动器"
+mkdir -p build/launcher
+"$ZIG" cc -target x86_64-windows-gnu -O2 -s -Wall \
   -Wl,--subsystem,windows -Wl,-e,mainCRTStartup \
-  launcher/main.c -o "$OUT_DIR/HMWLX.exe"
-echo "    $(ls -lh "$OUT_DIR/HMWLX.exe" | awk '{print $5}')"
+  launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
+  -o build/launcher/HMWLX-sfx.exe
+STUB_SIZE=$(stat -c%s build/launcher/HMWLX-sfx.exe)
+echo "    stub: $((STUB_SIZE / 1024)) KB"
 
-# ---------------------------------------------------------------- 拷贝 jar
-echo "==> 拷贝 fat jar"
-cp "$FAT_JAR" "$OUT_DIR/hmwlx.jar"
+if ! file build/launcher/HMWLX-sfx.exe | grep -q "GUI"; then
+  echo "错误：产物不是 GUI 子系统，双击会弹黑框" >&2
+  exit 1
+fi
 
-# ---------------------------------------------------------------- 下载 JRE
+# ---------------------------------------------------------------- 组装载荷
+echo "==> 组装载荷目录"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+
+cp "$FAT_JAR" "$STAGE_DIR/hmwlx.jar"
+
 if [[ ! -f "$JRE_CACHE" ]] || [[ "$(stat -c%s "$JRE_CACHE")" -lt 20000000 ]]; then
   echo "==> 下载 Windows JRE (Temurin 25)"
   curl -L --fail --retry 3 -o "$JRE_CACHE.part" "$JRE_URL"
@@ -82,40 +107,51 @@ if [[ -z "$JRE_DIR" ]]; then
   echo "错误：JRE 解压后找不到目录" >&2
   exit 1
 fi
-mv "$JRE_DIR" "$OUT_DIR/runtime"
-echo "    runtime: $(du -sh "$OUT_DIR/runtime" | cut -f1)"
+mv "$JRE_DIR" "$STAGE_DIR/runtime"
 
-# ---------------------------------------------------------------- 精简 JRE
-echo "==> 精简 JRE"
-rm -rf "$OUT_DIR/runtime/demo" \
-       "$OUT_DIR/runtime/man" \
-       "$OUT_DIR/runtime/include" \
-       "$OUT_DIR/runtime/lib/src.zip" 2>/dev/null || true
+# 精简：demo/man/include/src.zip 运行期用不到
+rm -rf "$STAGE_DIR/runtime/demo" \
+       "$STAGE_DIR/runtime/man" \
+       "$STAGE_DIR/runtime/include" \
+       "$STAGE_DIR/runtime/lib/src.zip" 2>/dev/null || true
 
-# ---------------------------------------------------------------- 校验关键文件
-echo "==> 校验"
-for f in HMWLX.exe hmwlx.jar runtime/bin/javaw.exe runtime/bin/server/jvm.dll; do
-  if [[ ! -f "$OUT_DIR/$f" ]]; then
-    echo "错误：缺少 $f" >&2
+for f in hmwlx.jar runtime/bin/javaw.exe runtime/bin/server/jvm.dll; do
+  if [[ ! -f "$STAGE_DIR/$f" ]]; then
+    echo "错误：载荷缺少 $f" >&2
     exit 1
   fi
 done
-echo "    所有关键文件就位"
+echo "    载荷: $(du -sh "$STAGE_DIR" | cut -f1) / $(find "$STAGE_DIR" -type f | wc -l) 个文件"
 
-# ---------------------------------------------------------------- 权限修正
-# Gradle / mktemp 可能留下 0700 目录，解压到别的机器会导致权限异常
-chmod -R a+rX "$OUT_DIR"
+# ---------------------------------------------------------------- 合成 exe
+echo "==> LZMA 压缩并追加到 exe（较慢，约 1-3 分钟）"
+python3 scripts/make-sfx.py \
+  --stub build/launcher/HMWLX-sfx.exe \
+  --payload-dir "$STAGE_DIR" \
+  --output "$EXE_OUT"
 
-# ---------------------------------------------------------------- 打包 ZIP
-echo "==> 打包 ZIP"
-rm -f "$ZIP_OUT"
-(cd dist && zip -qr9 "$(basename "$ZIP_OUT")" "HMWLX-win-x64")
+# ---------------------------------------------------------------- 可选 zip
+if [[ "$WANT_ZIP" == "true" ]]; then
+  echo "==> 额外生成便携 ZIP"
+  ZIP_STAGE="build/win-zip/HMWLX"
+  rm -rf build/win-zip
+  mkdir -p "$ZIP_STAGE"
+  cp build/launcher/HMWLX.exe "$ZIP_STAGE/"
+  cp "$STAGE_DIR/hmwlx.jar" "$ZIP_STAGE/"
+  cp -r "$STAGE_DIR/runtime" "$ZIP_STAGE/"
+  chmod -R a+rX build/win-zip
+  rm -f "$ZIP_OUT"
+  (cd build/win-zip && zip -qr9 "$ROOT/$ZIP_OUT" "HMWLX")
+  echo "    $ZIP_OUT ($(du -h "$ZIP_OUT" | cut -f1))"
+fi
 
 echo ""
 echo "=========================================="
 echo " 打包完成"
 echo "=========================================="
-echo " 目录: $OUT_DIR  ($(du -sh "$OUT_DIR" | cut -f1))"
-echo " ZIP : $ZIP_OUT ($(du -h "$ZIP_OUT" | cut -f1))"
+echo " 单文件: $EXE_OUT"
+echo " 大小  : $(du -h "$EXE_OUT" | cut -f1)"
 echo ""
-echo " 解压后双击 HMWLX.exe 即可运行，无需安装 Java。"
+echo " 用户双击即可运行。首次启动会解压到"
+echo "   %LOCALAPPDATA%\\HMWLX\\app\\"
+echo " 之后每次直接复用，不再解压。"
