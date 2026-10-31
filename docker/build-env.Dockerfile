@@ -69,6 +69,42 @@ RUN set -eux; \
     ldconfig; \
     rm -rf /var/lib/apt/lists/*
 
+# ------------------------------------------------------------ appimagetool
+#
+# 预置进镜像，而不是每次打包时现下：
+#   - CI 里访问 GitHub Releases 经常超时 / 拿不到 302 后的
+#     release-assets.githubusercontent.com，之前每轮都「跳过」
+#   - 它 15MB，跟着 Dockerfile 内容哈希一起缓存，下过一次就不再下
+#
+# Ubuntu 仓库里没有 appimagetool 包（只有 libappimage0 库），
+# 所以只能取官方 AppImage 发行版。
+#
+# 它是 AppImage 格式，容器里跑需要 FUSE（docker build 默认没开）。
+# 用 --appimage-extract 展开即可 —— 而且展开后反而更好用：
+#   /opt/appimagetool/usr/bin/appimagetool   真二进制（静态链接）
+#   /opt/appimagetool/usr/bin/mksquashfs     它要调用的打包器
+#
+# 注意这两个必须放在一起、保持 usr/bin 相对位置：官方的 AppRun
+# 靠 $this_dir/usr/bin 找 mksquashfs，单独拷一个二进制会失败。
+#
+ARG APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+RUN set -eux; \
+    mkdir -p /opt/appimagetool; \
+    curl -fsSL --retry 3 --retry-delay 5 -o /tmp/appimagetool.AppImage "$APPIMAGETOOL_URL"; \
+    chmod +x /tmp/appimagetool.AppImage; \
+    cd /tmp; \
+    /tmp/appimagetool.AppImage --appimage-extract >/dev/null; \
+    cp -a /tmp/squashfs-root/. /opt/appimagetool/; \
+    rm -rf /tmp/squashfs-root /tmp/appimagetool.AppImage; \
+    test -x /opt/appimagetool/usr/bin/appimagetool; \
+    test -x /opt/appimagetool/usr/bin/mksquashfs; \
+    ln -sf /opt/appimagetool/usr/bin/appimagetool /usr/local/bin/appimagetool; \
+    /usr/local/bin/appimagetool --version
+
+# mksquashfs 也放进 PATH：appimagetool 在部分环境下会优先找
+# PATH 里的 mksquashfs，找不到才回落到自带的那份。两条路都铺上。
+ENV PATH="/opt/appimagetool/usr/bin:${PATH}"
+
 # ------------------------------------------------------------------ 自检
 #
 # 构建镜像时就验证一遍：环境不对在这里失败，比跑到打包第 3 步
@@ -93,6 +129,7 @@ RUN set -eux; \
         python3 \
         zip unzip rpm rpmbuild \
         xz tar gzip file fakeroot \
+        appimagetool mksquashfs \
         curl sed awk grep find sort cut tr head tail \
         stat du df mktemp readlink sha256sum \
     ; do \

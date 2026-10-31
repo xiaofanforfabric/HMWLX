@@ -83,7 +83,21 @@ if [[ ! -f "$ICON" ]]; then
 fi
 
 APPIMAGE_TOOL=""
-for c in "${APPIMAGETOOL:-}" /tmp/appimagetool "$(command -v appimagetool || true)"; do
+# 查找顺序：
+#   1. $APPIMAGETOOL 显式指定
+#   2. PATH 里的 appimagetool（镜像里是 /usr/local/bin 的软链）
+#   3. 镜像里展开好的真二进制
+#   4. /tmp/appimagetool（手工下载的旧备选路径）
+#
+# 镜像已预置，CI 里正常走第 2 条，不再需要运行时下载。
+#
+# 注意用展开后的 usr/bin/appimagetool 而不是 AppImage 本体：
+# 容器里通常没有 FUSE，直接执行 AppImage 会失败；而展开后的
+# 是静态链接的普通 ELF，随时能跑。
+for c in "${APPIMAGETOOL:-}" \
+         "$(command -v appimagetool || true)" \
+         /opt/appimagetool/usr/bin/appimagetool \
+         /tmp/appimagetool; do
     if [[ -n "$c" && -x "$c" ]]; then APPIMAGE_TOOL="$c"; break; fi
 done
 
@@ -445,7 +459,11 @@ if [[ "$DO_APPIMAGE" == "true" ]]; then
     echo "→ 构建 AppImage…"
     if [[ -z "$APPIMAGE_TOOL" ]]; then
         echo "  跳过：找不到 appimagetool" >&2
-        echo "  下载：curl -L -o /tmp/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage && chmod +x /tmp/appimagetool" >&2
+        echo "  镜像里应该预置在 /opt/appimagetool/usr/bin/appimagetool。" >&2
+        echo "  本地手动准备：" >&2
+        echo "    curl -L -o /tmp/ait.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" >&2
+        echo "    chmod +x /tmp/ait.AppImage && /tmp/ait.AppImage --appimage-extract" >&2
+        echo "    sudo mkdir -p /opt/appimagetool && sudo cp -a squashfs-root/. /opt/appimagetool/" >&2
     else
         APPDIR="build/HMWLX.AppDir"
         rm -rf "$APPDIR"
@@ -504,12 +522,20 @@ DESKTOP
         cp "$APPDIR/${PKG_NAME}.desktop" "$APPDIR/usr/share/applications/"
 
         APPIMAGE_OUT="${DIST_DIR}/${APP_NAME}-${APP_VERSION}-x86_64.AppImage"
+        # appimagetool 会调 mksquashfs。镜像里两份放同一目录
+        # （/opt/appimagetool/usr/bin），这里把该目录补进 PATH，
+        # 不用依赖 Dockerfile 的 ENV —— 本地直接跑脚本也能用。
+        APPIMAGE_TOOL_DIR="$(dirname "$APPIMAGE_TOOL")"
+        export PATH="${APPIMAGE_TOOL_DIR}:${PATH}"
         # --no-appstream：不生成 AppStream 元数据。
         # 那需要额外的 appstream-util 和元数据文件，对自用分发没必要，
         # 缺了它 appimagetool 会报 warning 但不影响产物可用性。
         ARCH=x86_64 "$APPIMAGE_TOOL" --no-appstream "$APPDIR" "$APPIMAGE_OUT" 2>&1 \
             | grep -vE "^(appimagetool|WARNING: AppStream)" || true
-        chmod +x "$APPIMAGE_OUT"
+        if [[ ! -f "$APPIMAGE_OUT" ]]; then
+            echo "  AppImage 构建失败：未生成 $APPIMAGE_OUT" >&2
+        fi
+        chmod +x "$APPIMAGE_OUT" 2>/dev/null || true
         echo "   $APPIMAGE_OUT  ($(du -h "$APPIMAGE_OUT" | cut -f1))"
     fi
 fi
