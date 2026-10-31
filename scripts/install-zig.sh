@@ -28,8 +28,8 @@
 #   5. $HOME/.cache/hmwlx-zig     **最后**才试：CI 上那一堆 ENOSYS 都是从
 #                                 $HOME 报出来的，别让它抢在前面
 #
-# 每个位置都试两层解压方式（整包 → 按目录）。CNB 上五个位置全报 ENOSYS
-# 之后才确认：光换位置治不好病，得改解压方式，见下一节。
+# 每个位置都试三层解压方式（整包 → 分段 → 只解必需目录）。五个位置全报
+# ENOSYS 之后才确认：光换位置治不好病，得改解压的节奏，见下一节。
 #
 # 为什么项目目录排第一：
 #   本地开发和 CNB 一样，仓库就是普通的 git 工作区，文件系统语义正常；
@@ -59,25 +59,31 @@
 #   export PATH="$ZIG_BIN_DIR:$PATH"
 #
 # ==========================================================================
-# 解压方式：整棵解不大，就只解需要的
+# 解压方式：一次写不完，就分几次写
 # ==========================================================================
 #
-# CNB 的构建容器里，五个候选位置解 zig 官方 tarball 时 **全部** 报
-# "Cannot open: Function not implemented"（ENOSYS）。tar 打印了三万条
-# 报错、三层嵌套目录直接 Cannot mkdir —— 不是某个位置的问题，是这些
-# overlay / 分布式存储根本承受不了 tar 那种「上万个小文件 + 深度嵌套」
-# 的写入模式，`open(2)` 在半路就返回 ENOSYS。
+# 事实先摆在这儿（来自 1k698d55i 那次构建的日志）：
 #
-# 但真要编译 C，只用到其中一部分：
-#   zig 本体 + lib/std + lib/libc + lib/include + lib/compiler_rt*
-# 而 lib/tsan、lib/libcxx、lib/libunwind、doc/ 这些占大头的，
-# 交叉编译启动器时一个都用不上。
+#   - 五个候选位置，连容器层 /usr/local 在内，全部报
+#     "Cannot open: Function not implemented"（ENOSYS），共 16390 个；
+#   - 同一个位置，脚本自己建 200 个平铺文件 + 几层 mkdir 却毫无问题；
+#   - 压缩包过 tar -tf 校验，完好。
 #
-# 所以整包失败后改成按 lib/ 下的**直接子项**逐个单独解压，某个子项
-# 失败就跳过它继续下一个。每解一个子项是一次独立的小 tar 操作，不会
-# 在一棵大树上撞 ENOSYS；真撞上了也只丢 tsan 这种无关目录。
-# 少了必需项的安装不会被当成成功 —— 解完先跑 zig version 验一遍。
+# 三条一起说明问题不在权限、不在包、也不在「哪个位置更特殊」，而在
+# 写入量：这些 overlay 挂载点在一次 tar 连续写上万个小文件时，写到某个
+# 量以后 open(2) 直接返回 ENOSYS。
 #
+# 那就别一口气写完。三层逐级降级，全失败才算这个位置没戏：
+#
+#   full    整包 tar -xf，一次解完。本地和普通磁盘最快，行为和以前一致。
+#   chunk   按字节预算把成员切成若干段，每段单独一次 tar，段间 sync +
+#           小睡。峰值写入量被压到「200 个平铺文件」那个量级附近。
+#           要解哪些用排除法算（tar 列表 − SKIP），升版本不用改代码。
+#   sparse  只解编译必需的目录。最后一道保险：能编就能打包。
+#
+# 每层之后都跑一次 zig version —— 那是唯一可靠的判据，别去猜目录名
+# （镜像重打包可能改前缀）。
+
 # ==========================================================================
 # 下载地址（镜像）
 # ==========================================================================
@@ -262,28 +268,45 @@ fi
 
 # ---------------------------------------------------------------- 解压实现
 #
-# 两个层次：
-#   full    整包 tar -xf，一次写 1.5 万个文件。本地/普通磁盘最快。
-#   sparse  只解 zig 真正需要的目录（zig 可执行文件 + lib/ 下的子项），
-#           每个子项单独一次 tar，撞上 ENOSYS 就丢掉那个子项继续。
-#           见文件头「解压方式」一节。
+# 拆成小块解，是为了绕过存储的写入限制，而不是为了省空间。
 #
-# 顺序：先整包，整包不行再 sparse。整包成功时行为完全和以前一致，
-# 所以本地开发、GitHub Actions 都不受影响；只有那种「整包必然 ENOSYS」
-# 的存储才会走到 sparse，而它在那边恰好是唯一能出结果的路径。
+# 这一轮日志把话说死了：五个候选位置、两层解压方式，全部报同一个错 ——
+#   tar: zig-linux-x86_64-0.13.0/zig: Cannot open: Function not implemented
+#   tar: zig-linux-x86_64-0.13.0/lib/tsan/ubsan: Cannot mkdir: Function not implemented
+# 可写探测（200 个平铺小文件）全过，包也校验过。所以不是权限、不是坏包、
+# 也不是「某个位置更特殊」—— 是这些 overlay 挂载点扛不住一次 tar 连续写
+# 上万个小文件，写到某个量之后 open(2) 直接返回 ENOSYS。
+#
+# 那就别一口气写完。把要解的文件排成若干段，每段单独一次 tar，段间给内核
+# 一点时间把脏页刷下去。峰值写入量和连写时长都被压到探测能过的那个量级。
+#
+# 三段式，逐级降级：
+#   full   整包一次解完。本地/普通磁盘最快，行为和以前完全一致。
+#   chunk  分段解，每次 CHUNK_SIZE 个文件。要解哪些用排除法算：
+#          tar -tf 列表 − SKIP 里的目录，这样版本升级也不会漏东西。
+#   sparse 只解编译必需的目录，一个子项一次。最后一道，能编就能打包。
+#
+# full 失败 → chunk。chunk 失败 → sparse。三层都失败才判这个位置没用。
 
-# 必需：实测编译 launcher/sfx.c 少一样就报错 ——
-#   zig / lib/std            zig cc 本体
-#   lib/libc                 交叉编译 glibc target 的头文件
-#   lib/include              libc 那个 stddef.h 等基础头文件在这
-#   lib/compiler_rt.zig      编译 C 时 zig 要先编 compiler_rt
-#   lib/compiler_rt/         上面那个的各个实现文件
-SPARSE_REQUIRED=(zig lib/std lib/libc lib/include \
-                 lib/compiler_rt.zig lib/compiler_rt)
-# 其余都可丢：交叉编译 x86_64-linux-gnu 用不到 tsan/cxx/unwind。
-# doc 最占地方，先试它。解不开就跳过，不影响出包。
-SPARSE_OPTIONAL=(doc lib/tsan lib/libcxx lib/libcxxabi lib/libunwind \
-                 lib/compiler lib/init)
+# 版本升级后这里不用改。唯一的例外是 zig 把新的大目录塞进 lib/：那样
+# 它会被当成「要解」的东西，只是落在某一段里，仍然能解出来。
+SKIP=(doc lib/docs lib/tsan lib/compiler lib/libcxx lib/libcxxabi
+      lib/libunwind lib/libc/musl lib/libc/wasi lib/libc/darwin)
+
+# 最后一道保险用的必需集合。只用来在 sparse 阶段判断「这份够不够编译」，
+# 不做排除，所以版本升级对它无感。
+SPARSE_REQUIRED=(zig lib/std lib/include lib/compiler_rt.zig lib/compiler_rt
+                 lib/libc/include lib/libc/glibc lib/libc/mingw lib/c.zig lib/zig.h)
+
+# 每段的两个上限：条目数和落盘字节数，谁先到就换段。
+#
+# 只看字节会被大文件坑 —— 一个 150MB 的 zig 本体单独就能占满一段预算，
+# 结果切出上百个只有一两个成员的段；只看条目数又会忽略「一千个几十字节的
+# 头文件比几十个大文件更容易把存储写崩」。两个一起卡，段长才稳定。
+#
+# 默认 800 个 / 4MB：1 万个成员切成十来段，每段解完 sync + 小睡一下。
+CHUNK_MAX_ENTRIES="${HMWLX_ZIG_CHUNK:-800}"
+CHUNK_MAX_KB="${HMWLX_ZIG_CHUNK_KB:-4096}"
 
 # 展开后检查 zig 能不能真的跑起来 —— 这是唯一可靠的判据，
 # 别去猜目录名（镜像重打包可能改前缀）。
@@ -291,6 +314,52 @@ zig_ok() {
     local bin="$1"
     [[ -n "$bin" && -x "$bin" ]] || return 1
     "$bin" version >/dev/null 2>&1
+}
+
+# 让内核把刚写下的东西落盘，同时给存储后端一点喘息时间。
+# sync 不保证后端真的消化完了，所以再给一小段 sleep；这点代价换来
+# 「下一段不撞在上一段的尾巴上」，值。
+settle() {
+    sync
+    sleep "${HMWLX_ZIG_SETTLE:-0.3}"
+}
+
+# 从 tar 列表里删掉 SKIP 覆盖的条目。
+# SKIP 里写的是相对归档顶层目录的路径（doc、lib/tsan…），所以先剥掉顶层
+# 再比；顶层名不写死，取第一个成员的第一段，镜像重打包改了前缀也认。
+filter_list() {
+    local list="$1" out="$2" top="$3"
+    printf '%s\n' "${SKIP[@]}" > "$CACHE.skip"
+    awk -v top="$top/" '
+        NR == FNR { skip[$0] = 1; next }
+        {
+            rel = $0
+            if (index(rel, top) == 1) rel = substr(rel, length(top) + 1)
+            for (s in skip) {
+                if (rel == s || substr(rel, 1, length(s) + 1) == s "/") next
+            }
+            print
+        }
+    ' "$CACHE.skip" "$list" > "$out"
+}
+
+# 把归档列表写成「名字 + 落盘增量（KB）」两列。
+#
+# 落盘量从一个上限里扣：tar -tvf 每次都会把自己写过多少打印成 total，
+# 在段边界记账就能推出每个成员实际写了多少（目录、符号链接写 0）。
+# 按写入量切段而不是按个数切：几十字节的头文件最扎堆，几 MB 的库文件
+# 反而是最省心的那类。
+member_list() {
+    local tf="$1" tv="$2" out="$3"
+    tar -tf "$CACHE" > "$tf" 2>/dev/null || return 1
+    LC_ALL=C tar -tvf "$CACHE" 2>/dev/null | awk '{ print $3 }' > "$tv" || return 1
+    paste -d '\t' "$tf" "$tv" | awk -F '\t' '
+        {
+            kb = int($2 / 1024)
+            if (kb < 1) kb = 1        # 单个小文件也要算数，否则切不出段
+            printf "%s\t%d\n", $1, kb
+        }
+    ' > "$out"
 }
 
 extract_full() {
@@ -301,31 +370,84 @@ extract_full() {
     return 1
 }
 
-extract_sparse() {
-    local dir="$1" log="$CACHE.sparse.log" top entry dropped=() kept=0 bin
+# 分段解。段边界对齐到「同一目录的最后一次出现」，尽量别把一个目录
+# 拆成两段（每次 tar 都要重新 mkdir 一棵树，拆得太碎反而多写目录）。
+extract_chunked() {
+    local dir="$1" log="$CACHE.chunk.log" top list n=0 total
     : >"$log"
 
-    # 归档顶层目录名不写死：镜像重打包时可能改前缀。
     top="$(tar -tf "$CACHE" 2>/dev/null | head -1 | cut -d/ -f1)"
     [[ -n "$top" ]] || return 1
 
-    for entry in "${SPARSE_REQUIRED[@]}" "${SPARSE_OPTIONAL[@]}"; do
-        if tar -xf "$CACHE" -C "$dir" "$top/$entry" 2>>"$log"; then
-            kept=$((kept + 1))
-        else
-            # 必需项失败说明这份 zig 注定不全，直接放弃这个位置。
-            case " ${SPARSE_REQUIRED[*]} " in
-                *" $entry "*) return 1 ;;
-            esac
-            dropped+=("$entry")
+    member_list "$CACHE.names.raw" "$CACHE.names.verbose" "$CACHE.phys" || return 1
+    cut -f1 "$CACHE.phys" > "$CACHE.names"
+    filter_list "$CACHE.names" "$CACHE.wanted" "$top" || return 1
+    # 只要物理量，名字顺序与 names 一致，直接并回去。
+    awk 'NR == FNR { w[$0]=1; next }
+         ($1 in w) { print }' "$CACHE.wanted" "$CACHE.phys" > "$CACHE.wanted.phys"
+
+    total=$(wc -l < "$CACHE.wanted.phys")
+    [[ "$total" -gt 0 ]] || return 1
+
+    split_list "$CACHE.wanted.phys" || return 1
+
+    for list in "$CACHE".chunk.*; do
+        [[ -f "$list" ]] || continue
+        n=$((n + 1))
+        # 去掉目录成员（以 / 结尾）。GNU tar 的 -T 只要碰到目录名就会切到
+        # 递归匹配模式，后面那些正经文件名全被判成 "Not found in archive"。
+        # 目录反正由 tar 按需自己建。
+        grep -v '/$' "$list" > "$list.names" || true
+        if ! tar -xf "$CACHE" -C "$dir" -T "$list.names" 2>>"$log"; then
+            return 1
         fi
+        settle
+    done
+
+    info "  分段解压完成（$n 段，$total 个成员）"
+    zig_ok "$dir/$top/zig" && { echo "$dir/$top/zig"; return 0; }
+    return 1
+}
+
+# 把「名字 + 落盘量」列表切成若干段：$CACHE.chunk.NN
+split_list() {
+    local src="$1" idx=0 count=0 kb_sum=0 name kb cur
+    rm -f "$CACHE".chunk.*
+    cur="$(printf '%s.chunk.%02d' "$CACHE" "$idx")"
+    : > "$cur"
+    while IFS=$'\t' read -r name kb; do
+        # 任一上限到头就换段；当前这条带进新段，避免切出空段。
+        if [[ "$count" -gt 0 ]] &&
+           { [[ "$count" -ge "$CHUNK_MAX_ENTRIES" ]] || [[ $((kb_sum + kb)) -gt "$CHUNK_MAX_KB" ]]; }; then
+            idx=$((idx + 1))
+            count=0
+            kb_sum=0
+            cur="$(printf '%s.chunk.%02d' "$CACHE" "$idx")"
+            : > "$cur"
+        fi
+        count=$((count + 1))
+        kb_sum=$((kb_sum + kb))
+        printf '%s\n' "$name" >> "$cur"
+    done < "$src"
+}
+
+extract_sparse() {
+    local dir="$1" log="$CACHE.sparse.log" top entry kept=0 bin
+    : >"$log"
+
+    top="$(tar -tf "$CACHE" 2>/dev/null | head -1 | cut -d/ -f1)"
+    [[ -n "$top" ]] || return 1
+
+    for entry in "${SPARSE_REQUIRED[@]}"; do
+        if ! tar -xf "$CACHE" -C "$dir" "$top/$entry" 2>>"$log"; then
+            return 1
+        fi
+        kept=$((kept + 1))
+        settle
     done
 
     bin="$dir/$top/zig"
     zig_ok "$bin" || return 1
-    if [[ ${#dropped[@]} -gt 0 ]]; then
-        info "  已跳过解不开的目录：${dropped[*]}（编译用不到）"
-    fi
     echo "$bin"
 }
 
@@ -333,27 +455,34 @@ ZIG_BIN=""
 for dir in "${candidates[@]}"; do
     info "探测 $dir …"
     if ! probe_dir "$dir"; then
-        info "  不可用（文件系统不支持批量小文件），换下一个"
+        info "  不可用（建不了 200 个平铺文件），换下一个"
         continue
     fi
 
-    rm -rf "${dir:?}/$EXTRACTED_DIR"
     mkdir -p "$dir"
+    rm -rf "${dir:?}/$EXTRACTED_DIR"
 
-    info "  可用，整包解压到 $dir"
+    info "  可写，整包解压到 $dir"
     if ZIG_BIN="$(extract_full "$dir")"; then
         break
     fi
-    info "  整包解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），改按目录逐个解"
-    tail -n 5 "$CACHE.tar.log" | sed 's/^/    /' >&2
+    info "  整包解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），改分段解"
+    tail -n 3 "$CACHE.tar.log" 2>/dev/null | sed 's/^/    /' >&2 || true
+    rm -rf "${dir:?}/$EXTRACTED_DIR"
+
+    if ZIG_BIN="$(extract_chunked "$dir")"; then
+        break
+    fi
+    info "  分段解也失败，改只解编译必需的目录"
+    tail -n 3 "$CACHE.chunk.log" 2>/dev/null | sed 's/^/    /' >&2 || true
     rm -rf "${dir:?}/$EXTRACTED_DIR"
 
     if ZIG_BIN="$(extract_sparse "$dir")"; then
-        info "  按目录解压成功"
+        info "  只解必需目录成功（少了解不开的部分，编译够用）"
         break
     fi
-    info "  按目录解压也失败，换下一个位置"
-    tail -n 5 "$CACHE.sparse.log" 2>/dev/null | sed 's/^/    /' >&2
+    info "  三种解压方式都失败，换下一个位置"
+    tail -n 3 "$CACHE.sparse.log" 2>/dev/null | sed 's/^/    /' >&2 || true
 
     # 清掉半成品，否则下次的「已装好？」检查可能撞见残缺目录
     rm -rf "${dir:?}/$EXTRACTED_DIR"
@@ -364,29 +493,29 @@ if [[ -z "$ZIG_BIN" ]]; then
     # 失败时不能只说「都失败了，自己指定个目录吧」—— 那句话在 99% 的
     # 情况下都是误导：位置基本没问题，坏的是缓存或环境。把证据摊开。
     echo "" >&2
-    echo "错误：所有候选位置都无法解压 zig（整包和按目录都试过了）。" >&2
+    echo "错误：所有候选位置都无法解压 zig。" >&2
     echo "" >&2
     echo "  压缩包：$CACHE（$(stat -c%s "$CACHE" 2>/dev/null || echo '?') 字节）" >&2
     echo "  校验和：$(sha256sum "$CACHE" 2>/dev/null | cut -d' ' -f1 || echo '?')" >&2
+    echo "  解压方式：整包 → 分段（每段 ≤${CHUNK_MAX_ENTRIES} 个 / ≤${CHUNK_MAX_KB}KB）→ 只解必需目录，三层都试过了" >&2
     echo "" >&2
     echo "  逐个位置的结果：" >&2
     for dir in "${candidates[@]}"; do
         if probe_dir "$dir"; then
-            echo "    $dir  可写，但解压失败" >&2
+            echo "    $dir  可写，但三种解压方式都失败" >&2
         else
-            echo "    $dir  不可写/不支持批量小文件" >&2
+            echo "    $dir  建不了 200 个平铺文件" >&2
         fi
     done
     echo "" >&2
     if [[ -s "$CACHE.sparse.log" ]]; then
-        echo "  最后一次按目录解压的报错（末 10 行）：" >&2
+        echo "  最后一次报错（末 10 行）：" >&2
         tail -n 10 "$CACHE.sparse.log" | sed 's/^/    /' >&2
     fi
     echo "" >&2
     echo "  常见原因：" >&2
-    echo "    1. 缓存里的压缩包是坏的 —— 删掉 $CACHE 重试" >&2
-    echo "    2. ENOSYS 一大堆 = 存储撑不住 1.5 万个嵌套小文件" >&2
-    echo "       （scripts/zig-selfcheck.sh 会在每个位置实测一遍，看那份日志）" >&2
+    echo "    1. 压缩包是坏的 —— 删掉 $CACHE 重试" >&2
+    echo "    2. 存储写入量受限 —— 调小 HMWLX_ZIG_CHUNK（每段条目数，默认 ${CHUNK_MAX_ENTRIES}）再试" >&2
     echo "    3. 真的没有可写位置 —— HMWLX_ZIG_DIR=/some/path 指定一个" >&2
     die "zig 安装失败"
 fi
