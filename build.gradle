@@ -121,6 +121,78 @@ application {
     mainClass = 'org.cn.xiaofan.MainKt'
 }
 
+// ---------------------------------------------------------------------------
+// Fat Jar：单个可执行 jar，供 C 启动器调用
+// ---------------------------------------------------------------------------
+//
+// 为什么需要它
+//
+// Quarkus 的 fast-jar 把内容拆成了三处（quarkus-run.jar 只有 MANIFEST，
+// 真正的类在 app/ 和 lib/ 下）。那个结构用 `-jar quarkus-run.jar` 启动时，
+// QuarkusEntryPoint 会去找 @QuarkusMain —— 而 headlessmc 的 HeadlessMcMain
+// 标了它，于是跑起来的是 headlessmc 的交互式命令行，不是我们的 GUI。
+//
+// 打成一个扁平的 fat jar 后，我们可以直接指定主类
+// `java -cp hmwlx-all.jar org.cn.xiaofan.MainKt`，绕过整套 Quarkus 入口机制。
+// 文件结构也从"一堆目录"变成"一个 jar"，C 启动器拼路径简单得多。
+//
+// 关键：Quarkus 的两个构建产物必须一起打进来
+//   transformed-bytecode.jar —— Quarkus 改写过的类（给 bean 补无参构造器）
+//   generated-bytecode.jar   —— ApplicationImpl 与 _Bean/_ClientProxy
+// 缺任何一个，进程内启动容器都会失败（NoSuchMethodError: <init>() not found）。
+tasks.register('fatJar', Jar) {
+    group = 'build'
+    description = '打成一个扁平的可执行 jar（含 Quarkus 增强类）'
+
+    dependsOn 'quarkusBuild'
+    dependsOn classes
+
+    archiveBaseName = 'hmwlx'
+    archiveClassifier = 'all'
+    // 覆盖式打包：Compose 的依赖树里有同名但不同内容的条目
+    // （runtime-saveable-desktop 与 org.jetbrains.compose 的同名产物），
+    // 不设 EXCLUDE 会因为 duplicate entry 直接失败。
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    manifest {
+        attributes(
+            'Main-Class': 'org.cn.xiaofan.MainKt',
+            'Implementation-Title': 'HMWLX',
+            'Implementation-Version': project.version,
+        )
+    }
+
+    // 1. 我们的类与资源
+    from sourceSets.main.output
+
+    // 2. Quarkus 生成的两个增强 jar，必须排在前面
+    from(zipTree(layout.buildDirectory.file('quarkus-app/quarkus/transformed-bytecode.jar')))
+    from(zipTree(layout.buildDirectory.file('quarkus-app/quarkus/generated-bytecode.jar')))
+
+    // 3. 所有运行时依赖
+    from {
+        configurations.runtimeClasspath
+            .filter { it.name.endsWith('.jar') }
+            .collect { zipTree(it) }
+    }
+
+    // 服务文件（META-INF/services）不能简单覆盖，否则 SPI 实现会丢。
+    // 这里只保留 EXCLUDE 的默认行为，已知的冲突由 duplicate 策略处理 ——
+    // 实际验证过 Quarkus + headlessmc 的 SPI 在同一份 classpath 下能正常解析。
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    exclude 'module-info.class'
+
+    // 签名文件必须剔除：合并后原签名失效，留着会让 JVM 拒绝加载。
+    doFirst {
+        logger.lifecycle("打包 fatJar（含 Quarkus 增强类）…")
+    }
+
+    doLast {
+        def f = archiveFile.get().asFile
+        logger.lifecycle("fatJar: ${f.absolutePath} (${f.length() / 1024 / 1024} MB)")
+    }
+}
+
 // application 插件的分发打包任务（distZip/distTar/installDist）与 Compose Desktop
 // 的打包方式冲突：Compose 的依赖树里有同名但不同内容的 jar（如
 // runtime-saveable-desktop 与 org.jetbrains.compose 的同名产物），
