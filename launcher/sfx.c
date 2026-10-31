@@ -756,8 +756,28 @@ static int launch_jvm(const char *root, int argc, char **argv)
     char javaPath[2048], jarPath[2048];
 
 #ifdef _WIN32
-    path_join(javaPath, sizeof(javaPath), root, "runtime\\bin\\javaw.exe");
+    /*
+     * 用 java.exe 而不是 javaw.exe。
+     *
+     * javaw 是 GUI 版，不写任何控制台输出 —— JVM 启动失败时报的
+     * 错误（ClassNotFound / Module not found / UnsatisfiedLink）
+     * 全部丢失，只剩一个退出码。java.exe 会写 stderr，
+     * 我们把它接到 jvm.log，出问题就有完整堆栈可看。
+     *
+     * 为了不闪黑框，CreateProcess 时加 CREATE_NO_WINDOW。
+     */
+    path_join(javaPath, sizeof(javaPath), root, "runtime\\bin\\java.exe");
     path_join(jarPath, sizeof(jarPath), root, JAR_NAME);
+
+    /* 万一这份 runtime 只有 javaw 没有 java（理论上不该有，防一手） */
+    if (!file_exists(javaPath)) {
+        char alt[2048];
+        path_join(alt, sizeof(alt), root, "runtime\\bin\\javaw.exe");
+        if (file_exists(alt)) {
+            logmsg("警告：没找到 java.exe，退回 javaw.exe（JVM 输出将不可见）\n");
+            snprintf(javaPath, sizeof(javaPath), "%s", alt);
+        }
+    }
 #else
     path_join(javaPath, sizeof(javaPath), root, "runtime/bin/java");
     path_join(jarPath, sizeof(jarPath), root, JAR_NAME);
@@ -780,6 +800,85 @@ static int launch_jvm(const char *root, int argc, char **argv)
 
     logmsg("JAVA  : %s\n", javaPath);
     logmsg("JAR   : %s\n", jarPath);
+
+#ifdef _WIN32
+    /* 每次启动清空上次的 jvm.log，之后的写入都用追加模式，
+     * 这样 java -version 和真正的启动输出会按顺序累积在同一个文件里。 */
+    {
+        char jp[2048];
+        path_join(jp, sizeof(jp), root, "jvm.log");
+        wchar_t wjp[2048];
+        if (MultiByteToWideChar(CP_UTF8, 0, jp, -1, wjp, 2048) > 0) {
+            HANDLE h = CreateFileW(wjp, GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        }
+    }
+
+    /*
+     * 启动前先跑一次 `java -version`，把版本和默认编码记进日志。
+     *
+     * 这一步能区分两类完全不同的故障：
+     *   · runtime 自身坏了（缺 dll、被杀毒删了某部分）
+     *     -> 这里就会失败，日志里能看到 java 自己的报错
+     *   · runtime 正常，是应用启动时出的问题
+     *     -> 这里能正常打出 openjdk version
+     *
+     * 用同样的重定向方式，开销几十毫秒，值得。
+     */
+    {
+        char vcmd[2400];
+        snprintf(vcmd, sizeof(vcmd), "\"%s\" -version", javaPath);
+        wchar_t wv[2600], wdir2[2048];
+        if (MultiByteToWideChar(CP_UTF8, 0, vcmd, -1, wv, 2600) > 0 &&
+            MultiByteToWideChar(CP_UTF8, 0, root, -1, wdir2, 2048) > 0) {
+
+            SECURITY_ATTRIBUTES sa2;
+            ZeroMemory(&sa2, sizeof(sa2));
+            sa2.nLength = sizeof(sa2);
+            sa2.bInheritHandle = TRUE;
+
+            char vlogPath[2048];
+            path_join(vlogPath, sizeof(vlogPath), root, "jvm.log");
+            wchar_t wvlog[2048];
+            HANDLE hV = INVALID_HANDLE_VALUE;
+            if (MultiByteToWideChar(CP_UTF8, 0, vlogPath, -1, wvlog, 2048) > 0) {
+                hV = CreateFileW(wvlog, FILE_APPEND_DATA, FILE_SHARE_READ,
+                                 &sa2, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            }
+
+            STARTUPINFOW si2;
+            PROCESS_INFORMATION pi2;
+            ZeroMemory(&si2, sizeof(si2));
+            si2.cb = sizeof(si2);
+            ZeroMemory(&pi2, sizeof(pi2));
+            if (hV != INVALID_HANDLE_VALUE) {
+                si2.dwFlags |= STARTF_USESTDHANDLES;
+                si2.hStdOutput = hV;
+                si2.hStdError  = hV;
+                si2.hStdInput  = CreateFileW(L"NUL", GENERIC_READ,
+                                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                             &sa2, OPEN_EXISTING, 0, NULL);
+            }
+
+            if (CreateProcessW(NULL, wv, NULL, NULL, TRUE,
+                               CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+                               NULL, wdir2, &si2, &pi2)) {
+                WaitForSingleObject(pi2.hProcess, 15000);
+                DWORD vc = 0xFFFFFFFF;
+                GetExitCodeProcess(pi2.hProcess, &vc);
+                logmsg("java -version 退出码: %lu\n", (unsigned long)vc);
+                CloseHandle(pi2.hThread);
+                CloseHandle(pi2.hProcess);
+            } else {
+                logmsg("java -version 无法启动，GetLastError=%lu\n",
+                       (unsigned long)GetLastError());
+            }
+            if (hV != INVALID_HANDLE_VALUE) CloseHandle(hV);
+            if (si2.hStdInput) CloseHandle(si2.hStdInput);
+        }
+    }
+#endif
 
     int total = 1 + JVM_ARG_COUNT + 2 + (argc - 1) + 1;
     char **args = (char **)calloc((size_t)total, sizeof(char *));
@@ -868,16 +967,66 @@ static int launch_jvm(const char *root, int argc, char **argv)
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
 
-    if (!CreateProcessW(NULL, wcmd, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT,
+    /*
+     * 把 JVM 的 stdout/stderr 重定向到日志文件。
+     *
+     * 这一步是整个排查链路里最关键的一环：javaw.exe 不写控制台，
+     * JVM 启动失败时（类找不到、模块缺失、native 库加载失败）
+     * 报的错全部丢失，我们只能看到一个光秃秃的退出码 1。
+     *
+     * 所以这里改用 java.exe（控制台版）—— 它写 stderr，
+     * 由我们把 stderr 接到 launcher.log 上。为了让用户看不到
+     * 黑色控制台窗口，创建进程时用 CREATE_NO_WINDOW。
+     *
+     * 日志文件用追加模式单独打开：不能复用 g_logFile，
+     * 因为那是 C 运行库缓冲的文件句柄，把它当 OS 句柄交给
+     * 子进程会出问题。
+     */
+    SECURITY_ATTRIBUTES sa;
+    ZeroMemory(&sa, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hJvmLog = INVALID_HANDLE_VALUE;
+    {
+        char logPath[2048];
+        path_join(logPath, sizeof(logPath), root, "jvm.log");
+        wchar_t wlog[2048];
+        if (MultiByteToWideChar(CP_UTF8, 0, logPath, -1, wlog, 2048) > 0) {
+            hJvmLog = CreateFileW(wlog, FILE_APPEND_DATA, FILE_SHARE_READ,
+                                  &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        }
+    }
+
+    if (hJvmLog != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = hJvmLog;
+        si.hStdError  = hJvmLog;
+        /* stdin 给个空句柄，避免继承到奇怪的东西 */
+        si.hStdInput  = CreateFileW(L"NUL", GENERIC_READ,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                    &sa, OPEN_EXISTING, 0, NULL);
+    }
+
+    /* CREATE_NO_WINDOW：java.exe 是控制台程序，不加这个会闪一个黑框 */
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+
+    if (!CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, flags,
                         NULL, wdir, &si, &pi)) {
         char msg[2600];
         snprintf(msg, sizeof(msg), "启动 JVM 失败（错误码 %lu）。", (unsigned long)GetLastError());
         logmsg("错误：CreateProcessW 失败，GetLastError=%lu\n",
                (unsigned long)GetLastError());
+        if (hJvmLog != INVALID_HANDLE_VALUE) CloseHandle(hJvmLog);
+        if (si.hStdInput) CloseHandle(si.hStdInput);
         show_error(msg);
         free(wcmd); free(args);
         return 6;
     }
+
+    /* 父进程不再需要这些句柄，关掉以免拖住文件 */
+    if (hJvmLog != INVALID_HANDLE_VALUE) CloseHandle(hJvmLog);
+    if (si.hStdInput) CloseHandle(si.hStdInput);
     free(wcmd);
     free(args);
 
@@ -899,12 +1048,11 @@ static int launch_jvm(const char *root, int argc, char **argv)
         char msg[2600];
         snprintf(msg, sizeof(msg),
                  "Java 进程启动后立即退出（退出码 %lu）。\n\n"
-                 "常见原因：\n"
-                 "  · 运行时文件不完整（解压中断或被杀毒软件拦截）\n"
-                 "  · 显卡驱动不兼容（已强制软件渲染，通常不是这个）\n\n"
-                 "详细信息见日志：\n%%LOCALAPPDATA%%\\HMWLX\\launcher.log",
-                 (unsigned long)code);
+                 "JVM 的错误输出已记录到：\n%s\\jvm.log\n\n"
+                 "请把这个文件发给开发者。",
+                 (unsigned long)code, root);
         logmsg("错误：JVM 进程提前退出，退出码 %lu\n", (unsigned long)code);
+        logmsg("JVM 输出见 %s\\jvm.log\n", root);
         show_error(msg);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
