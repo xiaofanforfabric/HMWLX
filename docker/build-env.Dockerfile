@@ -28,6 +28,16 @@
 # 要兼容 Ubuntu 20.04 / Debian 11 时，打包时显式设 ZIG=... 走老路径，
 # 见 scripts/pack-linux.sh 的注释。
 #
+# 为什么不用 dpkg-deb 打 .deb
+# ========================
+# dpkg-deb --build 内部是 `tar -cf - -C <root> .`，同样会撞上上面的
+# ENOSYS。换成 scripts/make-deb.py：纯 Python 标准库（tarfile 生成
+# control.tar.xz / data.tar.xz，手写 60 字节 ar 头拼成 ar 归档），
+# 全程进程内完成，不 fork tar/ar/dpkg-deb。
+#
+# 因此镜像里【不需要】dpkg-deb，也不需要 python3-debian 这类第三方库。
+# 只要求 python3 带标准库 tarfile + lzma —— 下面的自检会验证。
+#
 FROM eclipse-temurin:25-jdk
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -40,7 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # rpm                   rpmbuild 打 RPM 包（Ubuntu 里包名就叫 rpm）
 # xz-utils              解 xz / 造 AppImage
 # file                  校验产物类型（pack-*.sh 里的 file | grep GUI）
-# fakeroot              rpmbuild / dpkg-deb 需要它来处理权限
+# fakeroot              rpmbuild 需要它来处理权限（DEB 已不用 dpkg-deb）
 #
 # 图形库：build.sh 里的 quarkusBuild 会加载应用类，部分类加载路径
 # 会触发 Skiko 的 native 初始化，缺 libGL 会 UnsatisfiedLinkError。
@@ -93,6 +103,7 @@ RUN set -eux; \
         exit 1; \
     fi; \
     python3 -c 'import lzma, hashlib, struct; print("python3 标准库 lzma/hashlib/struct 可用")'; \
+    python3 -c 'import tarfile, io; assert "xz" in tarfile.TarFile.OPEN_METH; print("python3 tarfile 支持 w:xz（make-deb.py 需要）")'; \
     printf '#include <windows.h>\n#include <commctrl.h>\nint main(void){return 0;}\n' > /tmp/t.c; \
     x86_64-w64-mingw32-gcc -mwindows -lcomctl32 -o /tmp/t.exe /tmp/t.c; \
     file /tmp/t.exe | grep -q "PE32+ executable" || { echo "错误：mingw 产物不是 PE32+" >&2; exit 1; }; \

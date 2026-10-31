@@ -105,8 +105,9 @@ done
 # 打包暂存目录
 #
 # 放 $BUILD_ROOT/linux-stage（CNB 上是 data 卷 /build）：
-#   dpkg-deb 和 rpmbuild 内部都要用 tar 遍历整个暂存树（runtime/ 有
-#   几百个文件）。放在 /workspace（OverlayFS）上会报
+#   DEB 已改用 scripts/make-deb.py（纯 Python，不调外部 tar），
+#   RPM 的 rpmbuild 内部仍用 tar 遍历整个暂存树（runtime/ 几百个文件）。
+#   放在 /workspace（OverlayFS）上会报
 #     tar: ./opt/hmwlx/runtime/bin/java: Cannot stat: Function not implemented
 #   而 data 卷是节点本地盘，没有这个限制。
 #
@@ -119,8 +120,10 @@ mkdir -p "$STAGE_BASE"
 
 if [[ "$DO_DEB" == "true" ]]; then
     echo "→ 构建 DEB…"
-    if ! command -v dpkg-deb >/dev/null; then
-        echo "  跳过：系统没有 dpkg-deb" >&2
+    # 不用 dpkg-deb：它内部 `tar -cf` 在 OverlayFS 上会报 ENOSYS。
+    # 改用 scripts/make-deb.py（纯 Python，tarfile + 手写 ar 头）。
+    if ! command -v python3 >/dev/null; then
+        echo "  跳过：系统没有 python3（打 DEB 需要它）" >&2
     else
         DEB_ROOT="$STAGE_BASE/deb-root"
         rm -rf "$DEB_ROOT"
@@ -239,7 +242,13 @@ HOOK
         chmod 644 "$DEB_ROOT/DEBIAN/control"
 
         DEB_OUT="${DIST_DIR}/${PKG_NAME}_${DEB_VERSION}_amd64.deb"
-        dpkg-deb --root-owner-group -Zxz --build "$DEB_ROOT" "$DEB_OUT" >/dev/null
+        # 纯 Python 组装：不 fork dpkg-deb / tar / ar，因此不走那条会
+        # 报 `Cannot stat: Function not implemented` 的路径。
+        # 详见 scripts/make-deb.py 顶部注释。
+        python3 "$PWD/scripts/make-deb.py" \
+            --root "$DEB_ROOT" \
+            --output "$DEB_OUT" \
+            --compression xz
         echo "   $DEB_OUT  ($(du -h "$DEB_OUT" | cut -f1))"
     fi
 fi
