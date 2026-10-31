@@ -43,15 +43,20 @@ WANT_ZIP=false
 [[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
 
 # ---------------------------------------------------------------- 定位 zig
+#
+# 优先用 install-zig.sh --path 的统一逻辑：它会依次看
+# $HMWLX_ZIG_DIR、$PWD/.tooling/zig、/tmp、$HOME 等位置，
+# 把 CI 和本地两种环境都盖住，不用在这里重复维护一份。
+#
 ZIG="${ZIG:-}"
 if [[ -z "$ZIG" ]]; then
   if command -v zig >/dev/null 2>&1; then
     ZIG="$(command -v zig)"
-  elif [[ -x "$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig" ]]; then
-    ZIG="$PWD/.tooling/zig/zig-linux-x86_64-0.13.0/zig"
+  elif _zd="$(bash scripts/install-zig.sh --path 2>/dev/null)" && [[ -x "$_zd/zig" ]]; then
+    ZIG="$_zd/zig"
   else
     echo "错误：找不到 zig。请设置 ZIG=/path/to/zig" >&2
-    echo "  或跑 ./scripts/install-zig.sh 自动装到 .tooling/zig" >&2
+    echo "  或跑 ./scripts/install-zig.sh 自动装" >&2
     exit 1
   fi
 fi
