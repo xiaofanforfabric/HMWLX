@@ -74,7 +74,10 @@
 # 别再把它加回列表，否则每次构建都要先吃一个必然失败的请求。
 #
 # 镜像目录结构与官方一致（<url>/<version>/<tarball>）。
-# 下载结果过了大小门槛还要能通过 xz -t 校验，别让镜像的 404 页面变成半个 tar.xz。
+# 下载结果过了大小门槛还要能被 tar 列开，别让镜像的 404 页面变成半个压缩包。
+#
+# 镜像上同时找 .tar.xz 和 .tar.gz：前者小 30%，后者解压不需要 xz 命令
+# （eclipse-temurin 这类精简镜像不带 xz）。
 #
 set -euo pipefail
 
@@ -86,6 +89,7 @@ cd "$ROOT"
 ZIG_VERSION="${ZIG_VERSION:-0.13.0}"
 
 TARBALL="zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+TARBALL_GZ="zig-linux-x86_64-${ZIG_VERSION}.tar.gz"
 EXTRACTED_DIR="zig-linux-x86_64-${ZIG_VERSION}"
 
 # 镜像按顺序试；HMWLX_ZIG_MIRROR 支持空格或逗号分隔的多个前缀。
@@ -164,31 +168,40 @@ done
 #
 CACHE_DIR="$ROOT/.tooling/cache"
 mkdir -p "$CACHE_DIR"
+# 缓存文件名固定带 .tar.xz 后缀（历史沿用），内容按魔数识别，
+# tar -x 自己会挑 gzip/xz 解压器，所以下到 .tar.gz 也存这里。
 CACHE="$CACHE_DIR/hmwlx-zig-${ZIG_VERSION}.tar.xz"
 
 MIN_BYTES=40000000   # 0.13.0 的包约 44.9MB，留点余量
 
 download_zig() {
     rm -f "$CACHE"
+    local name url size
     for base in "${MIRRORS[@]}"; do
-        url="${base%/}/${ZIG_VERSION}/${TARBALL}"
-        info "下载 zig $ZIG_VERSION ← $base"
-        # 单个镜像 2 次重试、单次最长 10 分钟，够慢速链路下完 44MB，
-        # 又不至于卡死整条流水线。
-        if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 \
-                --max-time 600 -o "$CACHE.part" "$url" 2>/dev/null; then
+        # .tar.xz 优先（小 30%），镜像只放了 .tar.gz 的退回 gz。
+        # 关键是 .tar.gz 用 gzip 解，不需要 xz 命令 —— eclipse-temurin
+        # 这类精简镜像不一定带 xz，多个选择就少一个失败点。
+        for name in "$TARBALL" "$TARBALL_GZ"; do
+            url="${base%/}/${ZIG_VERSION}/${name}"
+            info "下载 zig $ZIG_VERSION ← $base（$name）"
+            # 单个镜像 2 次重试、单次最长 10 分钟，够慢速链路下完 44MB，
+            # 又不至于卡死整条流水线。
+            if ! curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 \
+                    --max-time 600 -o "$CACHE.part" "$url" 2>/dev/null; then
+                info "  下载失败，换下一个镜像"
+                rm -f "$CACHE.part"
+                continue
+            fi
             size="$(stat -c%s "$CACHE.part" 2>/dev/null || echo 0)"
-            # 光看大小不够：镜像的 HTML 错误页也可能很大，真正的判据是
-            # 能不能通过 xz 的完整性校验。
-            if [[ "$size" -gt "$MIN_BYTES" ]] && xz -t "$CACHE.part" 2>/dev/null; then
+            # 光看大小不够：镜像的 HTML 错误页也可能很大。真正的判据是
+            # tar 能不能把它列开 —— 比调 xz 命令更稳，也不依赖外部命令。
+            if [[ "$size" -gt "$MIN_BYTES" ]] && tar -tf "$CACHE.part" >/dev/null 2>&1; then
                 mv "$CACHE.part" "$CACHE"
                 return 0
             fi
-            info "  不是有效的 tar.xz（${size}B），换下一个镜像"
-        else
-            info "  下载失败，换下一个镜像"
-        fi
-        rm -f "$CACHE.part"
+            info "  不是有效的压缩包（${size}B），换下一个"
+            rm -f "$CACHE.part"
+        done
     done
     return 1
 }
@@ -205,13 +218,10 @@ fi
 #
 # 探测通过的位置也可能解压到一半 ENOSYS，所以这里逐个候选位置真试一遍：
 # 失败就把半成品删掉换下一个。tar 的报错有上万行，只留最后 5 行提示。
-command -v xz > /dev/null 2>&1 || die "缺少 xz 命令（apt install xz-utils）
-  镜像 eclipse-temurin 不带 xz，装 zig 的 stage 必须先装上。"
-
-# 压缩包先用 xz 自己验一遍完整性。tar 展开到一半才发现坏包的话，
-# 错误会伪装成文件系统问题（报一堆 truncated / unexpected EOF），
-# 极难定位；单独验包能一眼看出是包坏了。
-if ! xz -t "$CACHE" 2>/dev/null; then
+# 不写死 tar -xJf：eclipse-temurin 这类精简镜像不带 xz 命令，-J 会直接
+# 失败在「找不到 xz」上，和文件系统问题长得一模一样。tar -x 按魔数自己
+# 挑解压器，.tar.xz / .tar.gz 都能吃，也不依赖外部 xz 命令。
+if ! tar -tf "$CACHE" > /dev/null 2>&1; then
     info "缓存里的 zig 包已损坏（多半是上次下载中途挂了），重新下载"
     download_zig || die "zig 压缩包损坏且重新下载失败。
   可以手动删掉 $CACHE 再试。"
@@ -228,9 +238,12 @@ for dir in "${candidates[@]}"; do
     info "  可用，解压到 $dir"
     rm -rf "${dir:?}/$EXTRACTED_DIR"
     mkdir -p "$dir"
-    if tar -xJf "$CACHE" -C "$dir" 2>"$CACHE.tar.log"; then
-        ZIG_BIN="$dir/$EXTRACTED_DIR/zig"
-        [[ -x "$ZIG_BIN" ]] && break
+    if tar -xf "$CACHE" -C "$dir" 2>"$CACHE.tar.log"; then
+        # 归档里的顶层目录名不要写死：镜像重打包时可能改前缀，
+        # 直接找 zig 可执行文件比猜目录名稳。
+        ZIG_BIN="$(find "$dir" -maxdepth 3 -type f -name zig -perm -u+x 2>/dev/null | head -1)"
+        [[ -n "$ZIG_BIN" && -x "$ZIG_BIN" ]] && break
+        ZIG_BIN=""
         info "  解压后找不到 zig 可执行文件，换下一个"
     else
         info "  解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），换下一个"
@@ -265,8 +278,9 @@ if [[ -z "$ZIG_BIN" ]]; then
     fi
     echo "" >&2
     echo "  常见原因：" >&2
-    echo "    1. 缓存里的 tar.xz 是坏的 —— 删掉 $CACHE 重试" >&2
-    echo "    2. 没装 xz —— apt install xz-utils" >&2
+    echo "    1. 缓存里的压缩包是坏的 —— 删掉 $CACHE 重试" >&2
+    echo "    2. 全部位置都失败 = 存储撑不住 1.5 万个嵌套小文件" >&2
+    echo "       （scripts/zig-selfcheck.sh 会在每个位置实测一遍，看那份日志）" >&2
     echo "    3. 真的没有可写位置 —— HMWLX_ZIG_DIR=/some/path 指定一个" >&2
     die "zig 安装失败"
 fi
