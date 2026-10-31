@@ -67,10 +67,14 @@
 #
 #   1. $HMWLX_ZIG_MIRROR  显式指定，可给多个（空格或逗号分隔）
 #   2. https://ziglang.org/download         官方
-#   3. https://npmmirror.com/mirrors/zig    国内 CDN，CNB 上快得多
+#   3. https://mirrors.huaweicloud.com/zig  国内镜像，官方 tarball 的镜像副本
+#
+# 注意：npmmirror 的 /mirrors/zig 已经失效 —— 它会 302 到
+# cdn.npmmirror.com/binaries/zig/…，那边是 NoSuchKey 404。
+# 别再把它加回列表，否则每次构建都要先吃一个必然失败的请求。
 #
 # 镜像目录结构与官方一致（<url>/<version>/<tarball>）。
-# 下载结果校验大小，别让镜像的 404 页面变成半个 tar.xz。
+# 下载结果过了大小门槛还要能通过 xz -t 校验，别让镜像的 404 页面变成半个 tar.xz。
 #
 set -euo pipefail
 
@@ -92,7 +96,7 @@ if [[ -n "${HMWLX_ZIG_MIRROR:-}" ]]; then
     MIRRORS+=($_m)
 fi
 MIRRORS+=("https://ziglang.org/download")
-MIRRORS+=("https://npmmirror.com/mirrors/zig")
+MIRRORS+=("https://mirrors.huaweicloud.com/zig")
 
 info() { echo "==> $*" >&2; }
 die()  { echo "错误：$*" >&2; exit 1; }
@@ -164,30 +168,35 @@ CACHE="$CACHE_DIR/hmwlx-zig-${ZIG_VERSION}.tar.xz"
 
 MIN_BYTES=40000000   # 0.13.0 的包约 44.9MB，留点余量
 
-if [[ -f "$CACHE" ]] && [[ "$(stat -c%s "$CACHE" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
-    info "使用已下载的 $CACHE"
-else
-    ok=0
+download_zig() {
+    rm -f "$CACHE"
     for base in "${MIRRORS[@]}"; do
         url="${base%/}/${ZIG_VERSION}/${TARBALL}"
         info "下载 zig $ZIG_VERSION ← $base"
         # 单个镜像 2 次重试、单次最长 10 分钟，够慢速链路下完 44MB，
         # 又不至于卡死整条流水线。
         if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 \
-                --max-time 600 -o "$CACHE.part" "$url" >&2; then
+                --max-time 600 -o "$CACHE.part" "$url" 2>/dev/null; then
             size="$(stat -c%s "$CACHE.part" 2>/dev/null || echo 0)"
-            if [[ "$size" -gt "$MIN_BYTES" ]]; then
+            # 光看大小不够：镜像的 HTML 错误页也可能很大，真正的判据是
+            # 能不能通过 xz 的完整性校验。
+            if [[ "$size" -gt "$MIN_BYTES" ]] && xz -t "$CACHE.part" 2>/dev/null; then
                 mv "$CACHE.part" "$CACHE"
-                ok=1
-                break
+                return 0
             fi
-            info "  文件太小（${size}B），像是错误页，换下一个镜像"
+            info "  不是有效的 tar.xz（${size}B），换下一个镜像"
         else
             info "  下载失败，换下一个镜像"
         fi
         rm -f "$CACHE.part"
     done
-    [[ "$ok" -eq 1 ]] || die "所有镜像都下载不到 zig $ZIG_VERSION。
+    return 1
+}
+
+if [[ -f "$CACHE" ]] && [[ "$(stat -c%s "$CACHE" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
+    info "使用已下载的 $CACHE"
+else
+    download_zig || die "所有镜像都下载不到 zig $ZIG_VERSION。
   试过的：${MIRRORS[*]}
   可以用 HMWLX_ZIG_MIRROR=<前缀> 指定一个镜像目录。"
 fi
@@ -196,7 +205,17 @@ fi
 #
 # 探测通过的位置也可能解压到一半 ENOSYS，所以这里逐个候选位置真试一遍：
 # 失败就把半成品删掉换下一个。tar 的报错有上万行，只留最后 5 行提示。
-command -v xz > /dev/null 2>&1 || die "缺少 xz 命令（apt install xz-utils）"
+command -v xz > /dev/null 2>&1 || die "缺少 xz 命令（apt install xz-utils）
+  镜像 eclipse-temurin 不带 xz，装 zig 的 stage 必须先装上。"
+
+# 压缩包先用 xz 自己验一遍完整性。tar 展开到一半才发现坏包的话，
+# 错误会伪装成文件系统问题（报一堆 truncated / unexpected EOF），
+# 极难定位；单独验包能一眼看出是包坏了。
+if ! xz -t "$CACHE" 2>/dev/null; then
+    info "缓存里的 zig 包已损坏（多半是上次下载中途挂了），重新下载"
+    download_zig || die "zig 压缩包损坏且重新下载失败。
+  可以手动删掉 $CACHE 再试。"
+fi
 
 ZIG_BIN=""
 for dir in "${candidates[@]}"; do
@@ -222,9 +241,35 @@ for dir in "${candidates[@]}"; do
     ZIG_BIN=""
 done
 
-[[ -n "$ZIG_BIN" ]] || die "所有候选位置都无法解压 zig。
-  试过的：${candidates[*]}
-  可以用 HMWLX_ZIG_DIR=/some/path 指定一个可写目录。"
+if [[ -z "$ZIG_BIN" ]]; then
+    # 失败时不能只说「都失败了，自己指定个目录吧」—— 那句话在 99% 的
+    # 情况下都是误导：位置基本没问题，坏的是缓存或环境。把证据摊开。
+    echo "" >&2
+    echo "错误：所有候选位置都无法解压 zig。" >&2
+    echo "" >&2
+    echo "  压缩包：$CACHE（$(stat -c%s "$CACHE" 2>/dev/null || echo '?') 字节）" >&2
+    echo "  校验和：$(sha256sum "$CACHE" 2>/dev/null | cut -d' ' -f1 || echo '?')" >&2
+    echo "" >&2
+    echo "  逐个位置的结果：" >&2
+    for dir in "${candidates[@]}"; do
+        if probe_dir "$dir"; then
+            echo "    $dir  可写，但解压失败" >&2
+        else
+            echo "    $dir  不可写/不支持批量小文件" >&2
+        fi
+    done
+    echo "" >&2
+    if [[ -s "$CACHE.tar.log" ]]; then
+        echo "  最后一次 tar 的报错（末 10 行）：" >&2
+        tail -n 10 "$CACHE.tar.log" | sed 's/^/    /' >&2
+    fi
+    echo "" >&2
+    echo "  常见原因：" >&2
+    echo "    1. 缓存里的 tar.xz 是坏的 —— 删掉 $CACHE 重试" >&2
+    echo "    2. 没装 xz —— apt install xz-utils" >&2
+    echo "    3. 真的没有可写位置 —— HMWLX_ZIG_DIR=/some/path 指定一个" >&2
+    die "zig 安装失败"
+fi
 
 info "验证"
 "$ZIG_BIN" version >&2
