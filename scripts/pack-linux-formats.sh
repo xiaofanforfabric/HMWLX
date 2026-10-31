@@ -44,11 +44,18 @@ PKG_NAME="hmwlx"          # DEB 包名必须全小写（Debian 政策）
 # shellcheck source=./version.sh
 source "$PWD/scripts/version.sh"
 
+# 构建工作区（CNB 上是 data 卷 /build，本地默认 <仓库>/build）。
+# 详见 scripts/build-env.sh 顶部关于 OverlayFS 的说明。
+# shellcheck source=./build-env.sh
+source "$PWD/scripts/build-env.sh"
+
 MAINTAINER="xiaofan <xiaofan@cn.xiaofan>"
 HOMEPAGE="https://cnb.cool/xiaofanforandroid/HMWLX/HMWLX"
 DESCRIPTION="Minecraft 启动器（HMWLX）"
 
-SRC_DIR="dist/${APP_NAME}-linux-x64"
+# 目录版由 pack-linux.sh 产出在构建区（不是 dist/），见那边的注释。
+SRC_DIR="$BUILD_ROOT/${APP_NAME}-linux-x64"
+# 最终安装包放 dist/（工作区），才能被 CNB 收集。
 DIST_DIR="dist"
 ICON="src/main/resources/images/icon-release.png"
 
@@ -95,23 +102,20 @@ done
 #       └── share/icons/hicolor/  图标（多尺寸）
 # ===========================================================================
 # ---------------------------------------------------------------------------
-# 打包暂存目录放哪
+# 打包暂存目录
 #
-# 不放 build/ 而放 $TMPDIR（通常是 /tmp）：
+# 放 $BUILD_ROOT/linux-stage（CNB 上是 data 卷 /build）：
 #   dpkg-deb 和 rpmbuild 内部都要用 tar 遍历整个暂存树（runtime/ 有
-#   几百个文件）。CI（CNB）的工作区存储对这个操作报
+#   几百个文件）。放在 /workspace（OverlayFS）上会报
 #     tar: ./opt/hmwlx/runtime/bin/java: Cannot stat: Function not implemented
-#   而同样的操作在容器本地盘（/tmp）完全正常 —— 和之前 zig 解压、
-#   zip 更新大 jar 是同一个存储限制。
+#   而 data 卷是节点本地盘，没有这个限制。
 #
-# 所以：暂存全在 $TMPDIR 里做，做好的 .deb/.rpm 再拷回 dist/。
-# 这样工作区只承载最终产物（几个大文件），不承载「上万次小文件操作」。
+# 做好的 .deb/.rpm 再拷回 dist/ —— 工作区只承载最终产物这几个大文件，
+# 不承载「上万次小文件操作」。清理由 build-env.sh 的 trap 统一负责。
 #
-STAGE_BASE="${TMPDIR:-/tmp}/hmwlx-stage-$$"
+STAGE_BASE="$LINUX_STAGE_DIR"
+rm -rf "$STAGE_BASE"
 mkdir -p "$STAGE_BASE"
-# 退出时清理暂存目录（几百 MB 的 runtime 副本，别留在 /tmp 里堆着）
-cleanup_stage() { rm -rf "$STAGE_BASE"; }
-trap cleanup_stage EXIT
 
 if [[ "$DO_DEB" == "true" ]]; then
     echo "→ 构建 DEB…"

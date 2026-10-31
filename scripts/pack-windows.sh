@@ -33,18 +33,21 @@ cd "$ROOT"
 # 同时提供 $FAT_JAR（根据版本拼出的构建产物路径）。
 # shellcheck source=./version.sh
 source "$ROOT/scripts/version.sh"
-STAGE_DIR="${TMPDIR:-/tmp}/hmwlx-win-payload-$$"  # 待嵌入的目录（exe 内不含这个结构）
+
+# 构建工作区（CNB 上是 data 卷 /build，本地默认 <仓库>/build）。
+# 详见 scripts/build-env.sh 顶部关于 OverlayFS 的说明。
+# shellcheck source=./build-env.sh
+source "$ROOT/scripts/build-env.sh"
+
+# 待嵌入的目录（exe 内不含这个结构）。
+# make-sfx.py 要遍历这几百个文件算 LZMA 索引，放在 OverlayFS 上会
+# 报 ENOSYS（dpkg-deb 就是这么挂的），所以放构建区。
+STAGE_DIR="$WIN_PAYLOAD_DIR"
 EXE_OUT="dist/HMWLX-${APP_VERSION}-win-x64.exe"
 ZIP_OUT="dist/HMWLX-${APP_VERSION}-win-x64.zip"
 JRE_URL="https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_windows_hotspot_25.0.5_8.zip"
-JRE_CACHE="dist/cache/temurin25-win-jre.zip"
-
-# 载荷目录放 $TMPDIR 而不是 build/：
-#   make-sfx.py 要遍历这几百个文件算 LZMA 索引，而 CI 的 /workspace
-#   在 OverlayFS 上，批量 stat 会报 ENOSYS（dpkg-deb 就是这么挂的）。
-#   $TMPDIR 是容器本地盘（.cnb.yml 里显式挂成 data 卷），没这个问题。
-cleanup_stage() { rm -rf "$STAGE_DIR"; }
-trap cleanup_stage EXIT
+# 下载缓存也放构建区：56MB 的 zip，没必要在工作区留一份
+JRE_CACHE="$CACHE_DIR/temurin25-win-jre.zip"
 
 WANT_ZIP=false
 [[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
@@ -108,7 +111,6 @@ mkdir -p dist/cache
 # -s 去符号表，产物从 ~300KB 降到 ~60KB。
 #
 echo "==> 编译自解压启动器"
-mkdir -p build/launcher
 
 SRCS=(launcher/sfx.c launcher/third_party/lzma/LzmaDec.c)
 
@@ -117,7 +119,7 @@ if [[ "$COMPILER_KIND" == "zig" ]]; then
     -Wl,--subsystem,windows -Wl,-e,mainCRTStartup \
     "${SRCS[@]}" \
     -lcomctl32 \
-    -o build/launcher/HMWLX-sfx.exe
+    -o "$LAUNCHER_DIR/HMWLX-sfx.exe"
 else
   # mingw-w64
   #
@@ -128,10 +130,10 @@ else
     -static-libgcc \
     "${SRCS[@]}" \
     -lcomctl32 \
-    -o build/launcher/HMWLX-sfx.exe
+    -o "$LAUNCHER_DIR/HMWLX-sfx.exe"
 fi
 
-STUB="build/launcher/HMWLX-sfx.exe"
+STUB="$LAUNCHER_DIR/HMWLX-sfx.exe"
 STUB_SIZE=$(stat -c%s "$STUB")
 echo "    stub: $((STUB_SIZE / 1024)) KB"
 

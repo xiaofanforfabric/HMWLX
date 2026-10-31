@@ -60,27 +60,35 @@
         env:
           LANG: C.UTF-8
           LC_ALL: C.UTF-8
+          # 所有编译 / 中间产物都写到这里，见下方 volumes 的说明。
+          # 脚本里统一用 ${BUILD_ROOT:?}，缺了直接报错，不静默回退。
+          BUILD_ROOT: /build
         volumes:
           # Gradle 缓存跨构建复用，避免每次重下依赖
           - main:/root/.gradle:copy-on-write
 
-          # /tmp 挂成 data 卷（节点本地盘），避开 /workspace 的 OverlayFS 限制。
+          # ------------------------------------------------------------
+          # 编译工作区（data 卷 = 临时数据卷，节点本地盘，结束自动清理）
           #
-          # 为什么必须这样做：
+          # 为什么不能直接用 /workspace：
           #   /workspace 在这个平台上落在 OverlayFS 上（文档「流水线缓存」
-          #   一节提到 copy-on-write 就是基于 OverlayFS）。对这种下层目录
-          #   做批量 stat/创建，会返回 ENOSYS：
+          #   一节提到 copy-on-write 就基于 OverlayFS）。对这种下层目录做
+          #   批量 stat / 创建会返回 ENOSYS：
           #     tar: ./opt/hmwlx/runtime/lib/server/libjvm.so:
           #          Cannot stat: Function not implemented
           #   之前四次踩坑（zig 解压、zip 更新大 jar、skiko 嵌入、
           #   dpkg-deb 打包）根因全是这一个。
           #
-          #   而 /tmp 是 tmpfs / 节点本地盘，不在 overlay 层，一切正常。
-          #   脚本里已经优先用 $TMPDIR 做暂存，这里把它显式声明成 data 卷，
-          #   不依赖「碰巧 /tmp 能用」。
+          # 为什么选 data 而不是 copy-on-write：
+          #   copy-on-write 是给「跨构建要复用的缓存」用的（如 ~/.gradle）。
+          #   编译中间产物每次都是新的，不需要跨构建保留，用 data 更合适：
+          #   结束时自动清理，不占节点缓存空间。
           #
-          # data 卷的语义正好合适：结束时自动清理，不占跨构建缓存。
-          - /tmp:data
+          # 目录划分：
+          #   /build/...   编译、暂存、打包，全在 data 卷里
+          #   /workspace/dist/  最终产物，留在工作区才能被 CNB 收集
+          # ------------------------------------------------------------
+          - /build:data
       stages:
         # 图形库（libGL / X11 / 字体）已经在 docker/build-env.Dockerfile 里
         # 装好了，这里不再单独补 —— 每个 stage 用的是同一个镜像，
@@ -225,11 +233,12 @@
         env:
           LANG: C.UTF-8
           LC_ALL: C.UTF-8
+          BUILD_ROOT: /build
         volumes:
           # PR 场景缓存只读，避免并发写入冲突
           - main:/root/.gradle:copy-on-write-read-only
-          # 同 push：/tmp 挂节点本地盘，避开 /workspace 的 OverlayFS 限制
-          - /tmp:data
+          # 同 push：编译工作区挂 data 卷，避开 /workspace 的 OverlayFS 限制
+          - /build:data
       stages:
         # 图形库已装进镜像，不需要单独补 stage（同 push 分支）。
 

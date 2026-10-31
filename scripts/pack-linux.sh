@@ -49,7 +49,18 @@ DIST_DIR="dist"
 # shellcheck source=./version.sh
 source "$ROOT/scripts/version.sh"
 
-OUT_DIR="${DIST_DIR}/${APP_NAME}-linux-x64"
+# 编译工作区：CNB 上是 data 卷 /build，本地默认 <仓库>/build。
+# 详见 scripts/build-env.sh 顶部关于 OverlayFS 的说明。
+# shellcheck source=./build-env.sh
+source "$ROOT/scripts/build-env.sh"
+
+# 目录版放构建区而不是 dist/：
+#   里面是完整的 JRE + jar（194M / 几百个文件），后续 formats 脚本要从
+#   它取材打 DEB/RPM。留在 dist/ 意味着这些文件落在 OverlayFS 上，
+#   而 dpkg-deb 的 tar -cf 正需要遍历它们 —— 就是报 ENOSYS 的那一步。
+#   放 $BUILD_ROOT（data 卷）后，formats 脚本读的也是本地盘。
+OUT_DIR="${BUILD_ROOT}/${APP_NAME}-linux-x64"
+# 单文件和压缩包是最终产物，留在 dist/（工作区）才能被 CNB 收集。
 RUN_OUT="${DIST_DIR}/${APP_NAME}-${APP_VERSION}-linux-x64.run"
 TAR_OUT="${DIST_DIR}/${APP_NAME}-linux-x64.tar.gz"
 
@@ -164,13 +175,13 @@ mkdir -p "$DIST_DIR"
 # gcc 则绑当前系统的 glibc。两者编出的 ELF 都能用，只是可运行范围不同。
 #
 echo "==> 编译 Linux 启动器"
-mkdir -p build/launcher
 
 SRCS=(launcher/sfx.c launcher/third_party/lzma/LzmaDec.c)
+STUB="$LAUNCHER_DIR/HMWLX-linux"
 
 if [[ "$COMPILER_KIND" == "zig" ]]; then
     "$CROSS_CC" cc -target x86_64-linux-gnu.2.31 -O2 -s -Wall \
-        "${SRCS[@]}" -o build/launcher/HMWLX-linux
+        "${SRCS[@]}" -o "$STUB"
 else
     # -s 去符号表（和 zig 的 -s 同效果，产物从 ~50KB 降到 ~35KB）
     # -static-libgcc 避免额外依赖 libgcc_s.so
@@ -180,10 +191,9 @@ else
     #   超了也会被 snprintf 截断而不是溢出，所以静音掉，
     #   免得真实警告被淹没。
     "$CROSS_CC" -O2 -s -Wall -Wno-format-truncation -static-libgcc \
-        "${SRCS[@]}" -o build/launcher/HMWLX-linux
+        "${SRCS[@]}" -o "$STUB"
 fi
 
-STUB="build/launcher/HMWLX-linux"
 chmod 755 "$STUB"
 echo "    $(du -h "$STUB" | cut -f1)"
 
@@ -273,7 +283,9 @@ fi
 # ---------------------------------------------------------------- 打 tar.gz
 echo "==> 打包 tar.gz"
 rm -f "$TAR_OUT"
-tar -C "$DIST_DIR" -czf "$TAR_OUT" "${APP_NAME}-linux-x64"
+# 源目录在 $BUILD_ROOT（data 卷），产物直接写到 dist/（工作区）。
+# tar 从本地盘读、往工作区写 —— 读取那一侧才是会报 ENOSYS 的，所以关键。
+tar -C "$BUILD_ROOT" -czf "$TAR_OUT" "${APP_NAME}-linux-x64"
 
 # ---------------------------------------------------------------- 单文件
 #

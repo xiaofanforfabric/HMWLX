@@ -37,6 +37,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# 构建工作区（CNB 上是 data 卷 /build）。见 scripts/build-env.sh。
+# shellcheck source=./build-env.sh
+source "$ROOT/scripts/build-env.sh"
+
 JAR="${1:-}"
 PLATFORM="${2:-}"
 OUT_JAR="${3:-$JAR}"
@@ -86,7 +90,8 @@ echo "==> skiko $SKIKO_VERSION / 目标平台 $PLATFORM"
 # 所以：解到临时目录，确认能解出非空的原生文件，才算下载成功。
 # 缓存命中也要过这一关 —— 上次失败留下的残包不能再被信任。
 #
-CACHE="dist/cache"
+# 缓存放构建区：skiko jar 有 10~100MB，没必要在工作区留一份
+CACHE="$CACHE_DIR"
 mkdir -p "$CACHE"
 SKIKO_JAR="$CACHE/skiko-$PLATFORM-$SKIKO_VERSION.jar"
 SKIKO_PATH="org/jetbrains/skiko/skiko-awt-runtime-$PLATFORM/$SKIKO_VERSION/skiko-awt-runtime-$PLATFORM-$SKIKO_VERSION.jar"
@@ -265,7 +270,7 @@ echo "==> 嵌入 $PLATFORM 的原生库"
 # 之前没检查 zip 的返回值，失败被静默吞掉，一直跑到最后校验才报
 # 「缺少 xxx.dll」，看着像下载坏了，其实下载好好的，是写入失败。
 #
-WORK_JAR="$(mktemp "${TMPDIR:-/tmp}/hmwlx-skiko-XXXXXX.jar")"
+WORK_JAR="$(mktemp "$BUILD_ROOT/hmwlx-skiko-XXXXXX.jar")"
 if ! cp "$JAR" "$WORK_JAR"; then
   echo "错误：无法创建临时 jar（$WORK_JAR）" >&2
   exit 1
@@ -273,7 +278,7 @@ fi
 
 if ! ( cd "$TMP" && zip -q -X "$WORK_JAR" "${NEW_FILES[@]}" ); then
   echo "错误：zip 嵌入原生库失败（临时文件 $WORK_JAR）" >&2
-  df -h "${TMPDIR:-/tmp}" 2>/dev/null | sed 's/^/    /' >&2
+  df -h "$BUILD_ROOT" 2>/dev/null | sed 's/^/    /' >&2
   rm -f "$WORK_JAR"
   exit 1
 fi
