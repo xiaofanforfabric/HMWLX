@@ -36,17 +36,54 @@ ARG ZIG_VERSION=0.13.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ------------------------------------------------------------------ 打包工具
+#
+# 必须先装这些，因为下一步下载 zig 要用 curl：
+#   eclipse-temurin 是基于 Ubuntu 的极简镜像，连 curl 都没有
+#   （第一次构建就是死在 `/bin/sh: 1: curl: not found`）。
+#
+# 对应 pack-linux-formats.sh / pack-windows.sh 的需要：
+#   curl        下载 zig / 备用
+#   zip unzip   打压缩包（Windows 的 .zip、AppImage 用的 tar）
+#   rpm         rpmbuild 打 RPM 包（Ubuntu 里包名就叫 rpm）
+#   xz-utils    解 xz / 造 AppImage
+#   file        校验产物类型（pack-*.sh 里的 file | grep GUI）
+#   fakeroot    rpmbuild / dpkg-deb 需要它来处理权限
+#
+# 图形库：build.sh 里的 quarkusBuild 会加载应用类，部分类加载路径
+# 会触发 Skiko 的 native 初始化，缺 libGL 会 UnsatisfiedLinkError。
+# 这些库必须在【宿主】装 —— CNB 里 ./gradlew 跑在容器内，装进镜像正好。
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        curl ca-certificates \
+        zip unzip rpm xz-utils file fakeroot \
+        libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+        libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+        fontconfig fonts-dejavu-core; \
+    ldconfig; \
+    rm -rf /var/lib/apt/lists/*
+
 # ------------------------------------------------------------------ zig
 #
 # 解压位置 /opt/zig：镜像里的常规软件目录。
 #
-# 这里故意不在 RUN 里做镜像回退 —— 镜像构建失败时 CI 日志能直接看到
-# 是哪个 URL 出的问题；真遇到网络问题再改 Dockerfile 即可，
-# 不用为了「某次构建刚好慢」把逻辑复杂化。
+# 这一步是关键：docker build 的层是普通 overlayfs，解压 zig 的 16000+
+# 个小文件毫无压力。而 CNB 构建机的存储对「一次写上万个小文件」会报
+# ENOSYS —— 那正是之前反复失败的原因，现在这一动作发生在镜像里，
+# 构建一次后就永久缓存在层中。
+#
+# 这里故意不做镜像回退 —— 构建失败时日志能直接看到是哪个 URL 出的
+# 问题；真遇到网络问题再改 Dockerfile 即可。
 #
 # 校验：只检查 zig 能正常输出版本号。ziglang.org 的 tarball 带 minisign
 # 签名，但这里省掉了验证密钥分发的问题 —— 镜像构建发生在可信环境，
 # 而版本号又写死（不是 latest），风险可控。
+#
+# URL 命名在 0.15 前后变过一次，所以两种顺序都试：
+#   0.13.0:  zig-linux-x86_64-0.13.0.tar.xz    （<os> 在前）
+#   0.15+:   zig-x86_64-linux-0.17.0.tar.xz    （<arch> 在前）
+# 写死其中一种，升级版本时就会突然 404；两种都试就没这个问题。
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -54,39 +91,28 @@ RUN set -eux; \
         arm64) zig_arch=aarch64 ;; \
         *) echo "不支持的架构: $arch" >&2; exit 1 ;; \
     esac; \
-    url="https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-linux-${ZIG_VERSION}.tar.xz"; \
-    echo "下载 $url"; \
+    base="https://ziglang.org/download/${ZIG_VERSION}"; \
+    ok=0; \
+    for name in \
+        "zig-linux-${zig_arch}-${ZIG_VERSION}" \
+        "zig-${zig_arch}-linux-${ZIG_VERSION}" \
+    ; do \
+        url="${base}/${name}.tar.xz"; \
+        echo "尝试 $url"; \
+        if curl -fL --retry 2 --retry-delay 2 --connect-timeout 20 \
+                -o /tmp/zig.tar.xz "$url"; then \
+            ok=1; break; \
+        fi; \
+        echo "  下载失败，换下一种命名"; \
+        rm -f /tmp/zig.tar.xz; \
+    done; \
+    [ "$ok" = 1 ] || { echo "错误：两种命名的 tarball 都下不到" >&2; exit 1; }; \
     mkdir -p /opt/zig; \
-    curl -fL --retry 3 --retry-delay 3 --connect-timeout 20 \
-         -o /tmp/zig.tar.xz "$url"; \
     tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
     rm -f /tmp/zig.tar.xz; \
     /opt/zig/zig version
 
 ENV PATH="/opt/zig:${PATH}"
-
-# ------------------------------------------------------------------ 打包工具
-#
-# 对应 pack-linux-formats.sh / pack-windows.sh 的需要：
-#   zip unzip   打压缩包（Windows 的 .zip、AppImage 用的 tar）
-#   rpm         rpmbuild 打 RPM 包（Debian 里包名就叫 rpm）
-#   xz-utils    解 xz / 造 AppImage
-#   file        校验产物类型（pack-*.sh 里的 file | grep GUI）
-#   curl        备用，镜像里已有
-#   fakeroot    rpmbuild / dpkg-deb 需要它来处理权限
-#
-# 图形库：build.sh 里的 quarkusBuild 会加载应用类，部分类加载路径
-# 会触发 Skiko 的 native 初始化，缺 libGL 会 UnsatisfiedLinkError。
-# 这些库必须在【宿主】装 —— CNB 里 ./gradlew 跑在容器内，所以装进镜像正好。
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        zip unzip rpm xz-utils file curl fakeroot \
-        libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
-        libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
-        fontconfig fonts-dejavu-core; \
-    ldconfig; \
-    rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------------ 自检
 #
