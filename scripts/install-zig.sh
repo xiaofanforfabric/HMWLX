@@ -48,11 +48,29 @@
 #
 #   ./scripts/install-zig.sh           装到自动选定的位置
 #   ./scripts/install-zig.sh --path    只打印 zig 可执行文件路径
+#   ./scripts/install-zig.sh --quiet   --path 的同义词，供 pack 脚本静默调用
 #
 # 装完后把返回的目录加进 PATH：
 #
 #   ZIG_BIN_DIR="$(./scripts/install-zig.sh --path)"
 #   export PATH="$ZIG_BIN_DIR:$PATH"
+#
+# ==========================================================================
+# 下载地址（镜像）
+# ==========================================================================
+#
+# 默认走官方 ziglang.org。CNB 构建机上实测只有 ~5MB/s，44MB 的包要 8 秒，
+# 而且换节点后会慢到 1MB/s 以上 —— 这一步本该是「装个工具」，不该成为
+# 打包 Stage 的瓶颈，还要陪上几十秒。
+#
+# 所以按镜像列表逐个试，第一个成功的赢：
+#
+#   1. $HMWLX_ZIG_MIRROR  显式指定，可给多个（空格或逗号分隔）
+#   2. https://ziglang.org/download         官方
+#   3. https://npmmirror.com/mirrors/zig    国内 CDN，CNB 上快得多
+#
+# 镜像目录结构与官方一致（<url>/<version>/<tarball>）。
+# 下载结果校验大小，别让镜像的 404 页面变成半个 tar.xz。
 #
 set -euo pipefail
 
@@ -64,8 +82,17 @@ cd "$ROOT"
 ZIG_VERSION="${ZIG_VERSION:-0.13.0}"
 
 TARBALL="zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-URL="https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}"
 EXTRACTED_DIR="zig-linux-x86_64-${ZIG_VERSION}"
+
+# 镜像按顺序试；HMWLX_ZIG_MIRROR 支持空格或逗号分隔的多个前缀。
+MIRRORS=()
+if [[ -n "${HMWLX_ZIG_MIRROR:-}" ]]; then
+    _m="${HMWLX_ZIG_MIRROR//,/ }"
+    # shellcheck disable=SC2206  # 故意按空白拆分
+    MIRRORS+=($_m)
+fi
+MIRRORS+=("https://ziglang.org/download")
+MIRRORS+=("https://npmmirror.com/mirrors/zig")
 
 info() { echo "==> $*" >&2; }
 die()  { echo "错误：$*" >&2; exit 1; }
@@ -113,7 +140,7 @@ candidates+=("${HOME:-/root}/.cache/hmwlx-zig")
 for dir in "${candidates[@]}"; do
     if [[ -x "$dir/$EXTRACTED_DIR/zig" ]]; then
         if "$dir/$EXTRACTED_DIR/zig" version > /dev/null 2>&1; then
-            if [[ "${1:-}" == "--path" ]]; then
+            if [[ "${1:-}" == "--path" || "${1:-}" == "--quiet" ]]; then
                 echo "$dir/$EXTRACTED_DIR"
             else
                 info "zig 已就绪: $dir/$EXTRACTED_DIR ($("$dir/$EXTRACTED_DIR/zig" version))"
@@ -135,12 +162,34 @@ CACHE_DIR="$ROOT/.tooling/cache"
 mkdir -p "$CACHE_DIR"
 CACHE="$CACHE_DIR/hmwlx-zig-${ZIG_VERSION}.tar.xz"
 
-if [[ -f "$CACHE" ]] && [[ "$(stat -c%s "$CACHE" 2>/dev/null || echo 0)" -gt 40000000 ]]; then
+MIN_BYTES=40000000   # 0.13.0 的包约 44.9MB，留点余量
+
+if [[ -f "$CACHE" ]] && [[ "$(stat -c%s "$CACHE" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
     info "使用已下载的 $CACHE"
 else
-    info "下载 zig $ZIG_VERSION"
-    curl -fL --retry 3 --connect-timeout 30 -o "$CACHE.part" "$URL" >&2
-    mv "$CACHE.part" "$CACHE"
+    ok=0
+    for base in "${MIRRORS[@]}"; do
+        url="${base%/}/${ZIG_VERSION}/${TARBALL}"
+        info "下载 zig $ZIG_VERSION ← $base"
+        # 单个镜像 2 次重试、单次最长 10 分钟，够慢速链路下完 44MB，
+        # 又不至于卡死整条流水线。
+        if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 \
+                --max-time 600 -o "$CACHE.part" "$url" >&2; then
+            size="$(stat -c%s "$CACHE.part" 2>/dev/null || echo 0)"
+            if [[ "$size" -gt "$MIN_BYTES" ]]; then
+                mv "$CACHE.part" "$CACHE"
+                ok=1
+                break
+            fi
+            info "  文件太小（${size}B），像是错误页，换下一个镜像"
+        else
+            info "  下载失败，换下一个镜像"
+        fi
+        rm -f "$CACHE.part"
+    done
+    [[ "$ok" -eq 1 ]] || die "所有镜像都下载不到 zig $ZIG_VERSION。
+  试过的：${MIRRORS[*]}
+  可以用 HMWLX_ZIG_MIRROR=<前缀> 指定一个镜像目录。"
 fi
 
 # ---------------------------------------------------------------- 解压
@@ -180,11 +229,14 @@ done
 info "验证"
 "$ZIG_BIN" version >&2
 
-if [[ "${1:-}" == "--path" ]]; then
-    echo "$(dirname "$ZIG_BIN")"
-else
-    echo ""
-    echo "zig 已安装：$(dirname "$ZIG_BIN")"
-    echo "加到 PATH："
-    echo "  export PATH=\"$(dirname "$ZIG_BIN"):\$PATH\""
-fi
+case "${1:-}" in
+    --path|--quiet)
+        echo "$(dirname "$ZIG_BIN")"
+        ;;
+    *)
+        echo ""
+        echo "zig 已安装：$(dirname "$ZIG_BIN")"
+        echo "加到 PATH："
+        echo "  export PATH=\"$(dirname "$ZIG_BIN"):\$PATH\""
+        ;;
+esac

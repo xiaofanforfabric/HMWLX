@@ -72,11 +72,15 @@ ZIG="${ZIG:-}"
 if [[ -z "$ZIG" ]]; then
     if command -v zig >/dev/null 2>&1; then
         ZIG="$(command -v zig)"
-    elif _zd="$(bash scripts/install-zig.sh --path 2>/dev/null)" && [[ -x "$_zd/zig" ]]; then
+    elif _zd="$(bash scripts/install-zig.sh --quiet)" && [[ -x "$_zd/zig" ]]; then
         ZIG="$_zd/zig"
     else
+        # 这里不要再把 install-zig.sh 的输出丢进 /dev/null：
+        # 自动安装失败时，真正的失败原因（镜像下不来、解压 ENOSYS）
+        # 全在它那份输出里。--quiet 只让它在成功时输出最后一行的路径，
+        # 失败时诊断信息照常走 stderr。
         echo "错误：找不到 zig。请设 ZIG=/path/to/zig" >&2
-        echo "  或跑 ./scripts/install-zig.sh 自动装" >&2
+        echo "  或跑 ./scripts/install-zig.sh 自动装（会打印失败原因）" >&2
         exit 1
     fi
 fi
