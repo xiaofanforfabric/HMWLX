@@ -386,7 +386,11 @@ Requires:       mesa-libGL
 %install
 # 把暂存目录的整棵文件树拷进 buildroot。
 # -a 保留符号链接（/usr/bin/hmwlx 是软链）和权限。
-cp -a "$STAGE_DIR"/. %{buildroot}/
+#
+# ${RPM_STAGE} 由外层 shell 在写 spec 时就展开了（heredoc 无引号），
+# 落地就是绝对路径 —— 不用 rpmbuild 的 --define 传，
+# 免得写错成 $STAGE_DIR / %{STAGE_DIR}。
+cp -a "${RPM_STAGE}"/. %{buildroot}/
 
 %post
 if [ -x /usr/bin/update-desktop-database ]; then
@@ -422,13 +426,11 @@ SPEC
         #   /mnt/A/HMYLX//tmp/hmwlx-stage-xxx/rpmbuild
         # rpmbuild 就找不到 spec 里的路径了。
         #
-        # STAGE_DIR 通过 --define 传进 spec：%install 里用
-        # `cp -a "$STAGE_DIR"/.` 把文件树拷进 buildroot，
-        # 不经过 Source0 + %setup，因此全程不调 tar。
+        # 不需要 --define STAGE_DIR：spec 里的 ${RPM_STAGE} 已经
+        # 在写文件时被 shell 展开成绝对路径了。
         if rpmbuild -bb \
                 --define "_topdir ${RPM_TOP}" \
                 --define "_build_id_links none" \
-                --define "STAGE_DIR ${RPM_STAGE}" \
                 "$RPM_TOP/SPECS/${PKG_NAME}.spec" > "$RPM_TOP/build.log" 2>&1; then
             RPM_OUT=$(find "$RPM_TOP/RPMS" -name "*.rpm" | head -1)
             if [[ -n "$RPM_OUT" ]]; then
