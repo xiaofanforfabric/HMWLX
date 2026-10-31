@@ -84,9 +84,13 @@ fi
 find_jdk25() {
     local candidates=(
         "${HMYLX_JDK25:-}"
+        # $JAVA_HOME 必须排前面：CI 镜像（CNB 的 eclipse-temurin:25-jdk、
+        # GitHub 的 setup-java）都把 JDK 装在非常规路径，只认这里。
+        "${JAVA_HOME:-}"
         /tmp/jdk25/jdk-25.0.5+8
         "$HOME/.jdks/temurin-25"
         /usr/lib/jvm/java-25-openjdk-amd64
+        /opt/java/openjdk
         /opt/idea-IU-262.8665.337/jbr
     )
     local c

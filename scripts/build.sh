@@ -29,10 +29,16 @@ find_jdk() {
     fi
 
     local candidates=(
+        # $JAVA_HOME 优先：CI 镜像（CNB 的 eclipse-temurin:25-jdk、
+        # GitHub 的 setup-java）把 JDK 装在非常规路径，只认这个。
+        # GitHub 的 setup-java 会同时设 JAVA_HOME 和环境变量，
+        # 但本地开发时用户通常不设，所以放前面不影响体验。
+        "${JAVA_HOME:-}"
         /opt/idea-IU-262.8665.337/jbr
         "$HOME/.jdks/temurin-25"
         "$HOME/.jdks/openjdk-25"
         /usr/lib/jvm/java-25-openjdk-amd64
+        /opt/java/openjdk
     )
 
     local c

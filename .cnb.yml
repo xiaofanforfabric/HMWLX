@@ -115,11 +115,37 @@
             #   git commit --allow-empty -m "test: 验证打包"
             ./scripts/release.sh --prepare "$CNB_COMMIT_MESSAGE_TITLE"
 
-            # 打包需要的工具：zig 打启动器、rpm 打 RPM 包、zip 打压缩包
+            # --- 依赖 ---
+            #
+            # 每个 stage 可能是独立容器，不共享前一个 stage 装的东西，
+            # 所以这里要把打包需要的一次性装齐：
+            #
+            #   zip unzip   打压缩包
+            #   rpm         rpmbuild 打 RPM 包
+            #   xz-utils    解压 zig 的 tar.xz
+            #   file        校验产物类型
+            #   curl        下载 zig
+            #
+            # 图形库（libgl1 等）也要装：pack-*.sh 本身不需要，但
+            # build.sh 里的 quarkusBuild 会加载应用类，某些类加载
+            # 路径会触发 Skiko 的 native 初始化。前一个 stage 装过，
+            # 但 stage 之间不共享文件系统。
             if command -v apt-get >/dev/null 2>&1; then
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                zip unzip rpm xz-utils file curl
+                zip unzip rpm xz-utils file curl \
+                libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+                libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
+                fontconfig fonts-dejavu-core
+              ldconfig || true
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y zip unzip rpm-build xz file curl \
+                mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y zip unzip rpm-build xz file curl \
+                mesa-libGL mesa-libGLU libX11 libXi libXrender \
+                libXtst libXext libXrandr fontconfig dejavu-sans-fonts
             fi
 
             # zig：官方 tarball，0.13.0 是本地验证过的版本
