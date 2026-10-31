@@ -27,7 +27,15 @@
 #include <stdarg.h>
 
 #ifdef _WIN32
+/* 进度条控件要求 Windows 2000+ 的 comctl32，声明版本避免被当成 IE3 */
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#ifndef _WIN32_IE
+#define _WIN32_IE 0x0600
+#endif
 #include <windows.h>
+#include <commctrl.h>   /* PROGRESS_CLASSW / PBM_SETPOS，进度条用 */
 #else
 #include <unistd.h>
 #include <sys/wait.h>
@@ -68,17 +76,203 @@ typedef struct {
 
 /* ------------------------------------------------------------ 诊断输出 */
 
-static int g_verbose = 0;
+/* 全局状态：日志句柄和详细模式开关，多处用到，集中定义在最前 */
+static FILE *g_logFile = NULL;
+static int   g_verbose = 0;
+
+/* 路径工具定义在下方，但日志函数要先用到，这里前置声明 */
+static int  get_cache_root(char *out, size_t cap);
+static int  mkdirs(const char *path);
+static void path_join(char *out, size_t cap, const char *a, const char *b);
+
+/*
+ * 首次运行解压 300MB 要 8 秒左右，这期间如果不给任何反馈，
+ * 用户会以为双击没反应，然后反复双击。
+ *
+ * Windows GUI 子系统没有控制台，所以这里弹一个带进度条的小窗口；
+ * 解压完成后自动关闭。Linux 直接打到 stderr。
+ *
+ * 窗口用「边解压边泵消息」的方式实现，不需要开线程：
+ * extract_all() 每处理一个文件就调用 progress_tick()，
+ * 里面用 PeekMessage 处理重绘和关闭请求，并重画进度条。
+ */
+#ifdef _WIN32
+
+typedef struct {
+    HWND hwnd;
+    HWND hbar;
+    HWND htext;
+    int total;
+    int done;
+    int cancelled;
+} ProgressUI;
+
+static ProgressUI g_ui;
+
+static LRESULT CALLBACK progress_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m) {
+    case WM_CLOSE:
+        /* 用户点叉：标记取消，extract_all 下一次检查时中止 */
+        g_ui.cancelled = 1;
+        return 0;
+    case WM_DESTROY:
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void progress_open(int total)
+{
+    memset(&g_ui, 0, sizeof(g_ui));
+    g_ui.total = total;
+
+    HINSTANCE hi = GetModuleHandleW(NULL);
+
+    /* 进度条属于 comctl32 的通用控件，必须先初始化才能创建；
+     * 不调的话 CreateWindowExW(PROGRESS_CLASSW) 会返回 NULL，
+     * 窗口里就没有进度条。 */
+    INITCOMMONCONTROLSEX icc;
+    icc.dwSize = sizeof(icc);
+    icc.dwICC = ICC_PROGRESS_CLASS;
+    InitCommonControlsEx(&icc);
+
+    WNDCLASSEXW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = progress_wndproc;
+    wc.hInstance = hi;
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)MAKEINTRESOURCEW(32512));  /* IDC_ARROW */
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"HMWLXProgress";
+    RegisterClassExW(&wc);
+
+    /* 居中于屏幕 */
+    int w0 = 420, h0 = 150;
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    int x = (sw - w0) / 2, y = (sh - h0) / 2;
+
+    g_ui.hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_APPWINDOW, L"HMWLXProgress",
+        L"" APP_NAME L" 首次启动", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        x, y, w0, h0, NULL, NULL, hi, NULL);
+
+    /* 默认光标/字体即可：zig 的 mingw 头文件把 GetStockObject 标成了
+     * dllimport 但没提供对应导入库，索性不设字体，系统会用默认的，
+     * 在中文 Windows 上一样能正常显示中文。 */
+
+    g_ui.htext = CreateWindowExW(0, L"STATIC", L"正在解压运行环境，请稍候…",
+                                 WS_CHILD | WS_VISIBLE,
+                                 20, 20, w0 - 60, 24, g_ui.hwnd, NULL, hi, NULL);
+
+    g_ui.hbar = CreateWindowExW(0, PROGRESS_CLASSW, NULL,
+                                WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
+                                20, 55, w0 - 60, 22, g_ui.hwnd, NULL, hi, NULL);
+    SendMessageW(g_ui.hbar, PBM_SETRANGE32, 0, total > 0 ? total : 1);
+
+    ShowWindow(g_ui.hwnd, SW_SHOW);
+    UpdateWindow(g_ui.hwnd);
+}
+
+/* 泵一次消息循环，让窗口能重绘、能响应关闭 */
+static void progress_pump(void)
+{
+    MSG msg;
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+static void progress_tick(int done)
+{
+    if (!g_ui.hwnd) return;
+    g_ui.done = done;
+    SendMessageW(g_ui.hbar, PBM_SETPOS, (WPARAM)done, 0);
+    progress_pump();
+}
+
+static void progress_close(void)
+{
+    if (g_ui.hwnd) {
+        DestroyWindow(g_ui.hwnd);
+        g_ui.hwnd = NULL;
+    }
+    UnregisterClassW(L"HMWLXProgress", GetModuleHandleW(NULL));
+}
+
+#else   /* ---------------- Linux ---------------- */
+
+static void progress_open(int total)  { (void)total; }
+static void progress_tick(int done)
+{
+    if (g_verbose && done % 32 == 0) fprintf(stderr, "  已解压 %d 个文件\n", done);
+}
+static void progress_close(void)      { }
+
+#endif
+
+/*
+ * 日志。
+ *
+ * GUI 子系统的 exe 没有控制台：stdout/stderr 句柄是无效的，
+ * fprintf 写出去的东西直接消失，用户和我们都看不到。
+ *
+ * 所以日志一律写文件：%LOCALAPPDATA%\HMWLX\launcher.log
+ * （Linux 是 $XDG_CACHE_HOME/HMWLX/launcher.log）。
+ *
+ * 每次启动覆盖写，只保留本次运行的过程 —— 这是个启动器，
+ * 排查问题是「刚才那次为什么没起来」，不需要历史累积。
+ * 追加模式会让文件无限长大，反而不好发给别人。
+ */
+static void log_open(void)
+{
+    char root[2048], path[2048];
+    if (get_cache_root(root, sizeof(root)) != 0) return;
+    mkdirs(root);
+    path_join(path, sizeof(path), root, "launcher.log");
+
+#ifdef _WIN32
+    wchar_t w[2048];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 2048) <= 0) return;
+    g_logFile = _wfopen(w, L"w");
+#else
+    g_logFile = fopen(path, "w");
+#endif
+    if (!g_logFile) return;
+
+    /* 记一行启动信息，方便对照版本和路径 */
+    fprintf(g_logFile, APP_NAME " 启动器日志\n");
+    fprintf(g_logFile, "日志文件 : %s\n", path);
+    fflush(g_logFile);
+}
+
+static void log_close(void)
+{
+    if (g_logFile) {
+        fclose(g_logFile);
+        g_logFile = NULL;
+    }
+}
 
 static void logmsg(const char *fmt, ...)
 {
+    va_list ap;
+
+    /* 始终写文件：即使没有 --verbose，出错时的关键信息也要留下 */
+    if (g_logFile) {
+        va_start(ap, fmt);
+        vfprintf(g_logFile, fmt, ap);
+        va_end(ap);
+        fflush(g_logFile);
+    }
+
+    /* 有控制台时（开发调试 / 从终端启动）同时打到 stderr */
     if (!g_verbose) return;
 #ifdef _WIN32
-    /* GUI 子系统没有控制台，尝试附着到父进程的控制台 */
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
     if (!h || h == INVALID_HANDLE_VALUE) return;
 #endif
-    va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -481,8 +675,13 @@ static int write_mark(const char *root, const char *tag)
 /* 解压全部条目到 root，逐条报告进度 */
 static int extract_all(const SFXIndex *idx, const char *root)
 {
+    int done = 0;
     for (uint32_t i = 0; i < idx->count; i++) {
         const SFXEntry *e = &idx->entries[i];
+
+#ifdef _WIN32
+        if (g_ui.cancelled) return -4;
+#endif
 
         /* 目录条目（名字以 / 结尾）只建目录 */
         size_t nl = strlen(e->name);
@@ -509,6 +708,7 @@ static int extract_all(const SFXIndex *idx, const char *root)
                 logmsg("写文件失败: %s\n", e->name);
                 return -3;
             }
+            progress_tick(++done);
             continue;
         }
 
@@ -524,6 +724,7 @@ static int extract_all(const SFXIndex *idx, const char *root)
             logmsg("写文件失败: %s\n", e->name);
             return -3;
         }
+        progress_tick(++done);
     }
     return 0;
 }
@@ -565,15 +766,20 @@ static int launch_jvm(const char *root, int argc, char **argv)
     if (!file_exists(javaPath)) {
         char msg[2600];
         snprintf(msg, sizeof(msg), "解压后找不到 Java 运行时：\n%s", javaPath);
+        logmsg("错误：java 不存在 %s\n", javaPath);
         show_error(msg);
         return 2;
     }
     if (!file_exists(jarPath)) {
         char msg[2600];
         snprintf(msg, sizeof(msg), "解压后找不到主文件：\n%s", jarPath);
+        logmsg("错误：jar 不存在 %s\n", jarPath);
         show_error(msg);
         return 3;
     }
+
+    logmsg("JAVA  : %s\n", javaPath);
+    logmsg("JAR   : %s\n", jarPath);
 
     int total = 1 + JVM_ARG_COUNT + 2 + (argc - 1) + 1;
     char **args = (char **)calloc((size_t)total, sizeof(char *));
@@ -615,6 +821,11 @@ static int launch_jvm(const char *root, int argc, char **argv)
         return 5;
     }
     MultiByteToWideChar(CP_UTF8, 0, root, -1, wdir, 2048);
+
+    /* 这行是最有用的排查信息：用户说「起不来」时，先看命令行对不对 */
+    logmsg("工作目录: %s\n", root);
+    logmsg("命令行: %s\n", cmd);
+
     free(cmd);
 
     STARTUPINFOW si;
@@ -627,6 +838,8 @@ static int launch_jvm(const char *root, int argc, char **argv)
                         NULL, wdir, &si, &pi)) {
         char msg[2600];
         snprintf(msg, sizeof(msg), "启动 JVM 失败（错误码 %lu）。", (unsigned long)GetLastError());
+        logmsg("错误：CreateProcessW 失败，GetLastError=%lu\n",
+               (unsigned long)GetLastError());
         show_error(msg);
         free(wcmd); free(args);
         return 6;
@@ -661,6 +874,10 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--verbose") == 0) g_verbose = 1;
     }
 
+    /* 先开日志：后面任何一步失败都要能查到原因 */
+    log_open();
+    logmsg("参数: %d 个\n", argc);
+
     SFXIndex idx;
     memset(&idx, 0, sizeof(idx));
 
@@ -671,22 +888,35 @@ int main(int argc, char **argv)
          * 兼容模式：这个 exe 没内嵌数据（比如是开发时的裸启动器），
          * 退回「同目录下有 runtime/ 和 hmwlx.jar」的老行为。
          */
+        logmsg("未发现内嵌索引，走兼容模式（同目录查找 runtime/）\n");
         char dir[2048];
         if (get_self_path(dir, sizeof(dir)) != 0) {
+            logmsg("错误：无法定位自身路径\n");
             show_error("无法定位自身路径。");
+            log_close();
             return 1;
         }
         path_dirname(dir);
-        return launch_jvm(dir, argc, argv);
+        logmsg("程序目录: %s\n", dir);
+        int r = launch_jvm(dir, argc, argv);
+        logmsg("兼容模式退出码: %d\n", r);
+        log_close();
+        return r;
     }
     if (rc != 0) {
+        logmsg("错误：索引解析失败 (rc=%d)\n", rc);
         show_error("自解压索引损坏，文件可能下载不完整。");
+        log_close();
         return 1;
     }
 
+    logmsg("索引: %u 个条目, 自身路径 %s\n", idx.count, idx.selfPath);
+
     if (get_cache_root(idx.cacheRoot, sizeof(idx.cacheRoot)) != 0) {
+        logmsg("错误：无法确定缓存目录\n");
         show_error("无法确定缓存目录。");
         free(idx.entries);
+        log_close();
         return 1;
     }
 
@@ -694,30 +924,53 @@ int main(int argc, char **argv)
     char tmp[2048];
     path_join(tmp, sizeof(tmp), idx.cacheRoot, CACHE_TAG);
     path_join(appRoot, sizeof(appRoot), tmp, idx.cacheTag);
+    logmsg("解压目标: %s\n", appRoot);
 
     /* 已解压过就直接启动，这是常态路径 */
     if (!is_marked_extracted(appRoot, idx.cacheTag)) {
         if (mkdirs(appRoot) != 0) {
             char msg[2600];
             snprintf(msg, sizeof(msg), "无法创建解压目录：\n%s", appRoot);
+            logmsg("错误：mkdirs 失败 %s\n", appRoot);
             show_error(msg);
             free(idx.entries);
+            log_close();
             return 1;
         }
-        logmsg("首次运行，正在解压 %u 个文件到 %s\n", idx.count, appRoot);
+        logmsg("首次运行，开始解压 %u 个条目\n", idx.count);
+
+        /* 弹进度窗：解压要 8 秒左右，没有反馈用户会反复双击 */
+        progress_open((int)idx.count);
         int erc = extract_all(&idx, appRoot);
+        progress_close();
+
+        if (erc == -4) {
+            /* 用户主动取消：静默退出，不弹错误框 */
+            logmsg("用户取消解压\n");
+            free(idx.entries);
+            log_close();
+            return 0;
+        }
         if (erc != 0) {
             char msg[2600];
             snprintf(msg, sizeof(msg),
                      "解压失败（代码 %d）。\n\n可能是磁盘空间不足，或下载的文件不完整。\n"
                      "可以删除下面这个目录后重试：\n%s", erc, appRoot);
+            logmsg("错误：解压失败，代码 %d\n", erc);
             show_error(msg);
             free(idx.entries);
+            log_close();
             return 1;
         }
         write_mark(appRoot, idx.cacheTag);
+        logmsg("解压完成，已写标记文件\n");
+    } else {
+        logmsg("已解压过，跳过解压\n");
     }
 
     free(idx.entries);
-    return launch_jvm(appRoot, argc, argv);
+    int r = launch_jvm(appRoot, argc, argv);
+    logmsg("启动 JVM 返回: %d\n", r);
+    log_close();
+    return r;
 }

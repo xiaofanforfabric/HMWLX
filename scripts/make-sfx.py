@@ -147,6 +147,11 @@ def build(stub_path, payload_dir, output_path, level=9):
     with open(output_path, "wb") as f:
         f.write(body)
 
+    # 继承 stub 的权限位。Python 的 open() 用默认 umask 建文件（通常 0644），
+    # Linux 版用户拿到后直接跑会 Permission denied。
+    if os.name != "nt":
+        os.chmod(output_path, os.stat(stub_path).st_mode & 0o777)
+
     print()
     print("=" * 60)
     print(f"输出 : {output_path}")

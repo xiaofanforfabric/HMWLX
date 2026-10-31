@@ -73,6 +73,7 @@ mkdir -p build/launcher
 "$ZIG" cc -target x86_64-windows-gnu -O2 -s -Wall \
   -Wl,--subsystem,windows -Wl,-e,mainCRTStartup \
   launcher/sfx.c launcher/third_party/lzma/LzmaDec.c \
+  -lcomctl32 \
   -o build/launcher/HMWLX-sfx.exe
 STUB_SIZE=$(stat -c%s build/launcher/HMWLX-sfx.exe)
 echo "    stub: $((STUB_SIZE / 1024)) KB"
