@@ -1,0 +1,202 @@
+# 发版阶段 1：版本推进
+#
+# 触发：push 到任意分支，且提交信息首行以 rel: / RC: / beta: / dev: 开头
+#
+# 做的事：
+#   1. 算出下一个版本号（scripts/bump-version.py）
+#   2. 写进 gradle.properties
+#   3. 开一个新分支 release/v<版本>，提交并 push
+#   4. 开 PR 到主分支
+#
+# 为什么不在这一步直接打 tag：
+#   版本号变更要经过 review 和合并。直接打 tag 的话，万一版本号算错了
+#   （或合并时冲突），tag 已经推到远端，只能删 tag 重来 —— 对于已经
+#   有人开始下载的发布来说很麻烦。分两段，tag 在合并后才打。
+#
+# 阶段 2 见 release-tag.yml。
+
+name: Release Prepare
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: '阶段（rel / RC / beta / dev）'
+        required: true
+        type: choice
+        options: [rel, RC, beta, dev]
+      note:
+        description: '发版说明（可留空）'
+        required: false
+        type: string
+
+concurrency:
+  # 同一个分支同时只能有一个发版准备在跑，避免两个 PR 抢同一个版本号
+  group: release-prepare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: 推进版本号并开 PR
+    runs-on: ubuntu-latest
+    # 只处理发版提交；workflow_dispatch 时总是执行
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'rel:') ||
+      startsWith(github.event.head_commit.message, 'RC:') ||
+      startsWith(github.event.head_commit.message, 'beta:') ||
+      startsWith(github.event.head_commit.message, 'dev:')
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整历史来读 tag（verify 阶段会查重）
+          fetch-depth: 0
+          # 用默认 token 推分支；推送后不会再次触发 workflow，
+          # 因为 GitHub 默认不给 GITHUB_TOKEN 的推送触发新 workflow。
+          # 这正是我们要的：避免「开 PR 的提交又触发一轮 prepare」的死循环。
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Python 3 是 ubuntu runner 自带的，不需要 setup
+
+      - name: 计算下一版本
+        id: bump
+        env:
+          # workflow_dispatch 时用输入，否则用提交信息
+          INPUT_STAGE: ${{ inputs.stage }}
+          INPUT_NOTE: ${{ inputs.note }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MSG="${INPUT_STAGE}: ${INPUT_NOTE:-手动触发}"
+          else
+            MSG="$COMMIT_MSG"
+          fi
+
+          echo "提交信息: $MSG"
+
+          # --prepare 会写 gradle.properties 并把变量输出到 $GITHUB_ENV
+          ./scripts/release.sh --prepare "$MSG"
+
+      - name: 检查版本是否真的变了
+        id: check
+        run: |
+          set -euo pipefail
+          if git diff --quiet gradle.properties; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "gradle.properties 没有变化，跳过"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "版本已更新："
+            git diff gradle.properties
+          fi
+
+      - name: 创建发版分支并推送
+        if: steps.check.outputs.changed == 'true'
+        id: branch
+        env:
+          APP_VERSION: ${{ env.APP_VERSION }}
+        run: |
+          set -euo pipefail
+          BRANCH="release/v${APP_VERSION}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 从当前 SHA 开分支，避免受上游分支移动影响
+          git checkout -b "$BRANCH"
+
+          git add gradle.properties
+          git commit -m "chore(release): 版本号 ${VERSION_PREV} -> ${APP_VERSION}
+
+          由 release-prepare workflow 自动生成。
+          阶段：${RELEASE_STAGE}
+          tag：${RELEASE_TAG}
+          预发布：${IS_PRERELEASE}"
+
+          git push origin "$BRANCH"
+
+      - name: 开 PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ env.APP_VERSION }}
+          RELEASE_STAGE: ${{ env.RELEASE_STAGE }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          IS_PRERELEASE: ${{ env.IS_PRERELEASE }}
+          VERSION_PREV: ${{ env.VERSION_PREV }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          # 主分支名：仓库可能用 main 或 master
+          BASE="${{ github.event.repository.default_branch }}"
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            PRE_NOTE="这是一个**预发布版**（${RELEASE_STAGE}），GitHub Release 会标记为 pre-release。"
+          else
+            PRE_NOTE="这是一个**正式版**，GitHub Release 会标记为 latest。"
+          fi
+
+          cat > /tmp/pr-body.md <<EOF
+          ## 发版：${APP_VERSION}
+
+          | 项 | 值 |
+          |---|---|
+          | 版本 | \`${VERSION_PREV}\` → \`${APP_VERSION}\` |
+          | 阶段 | \`${RELEASE_STAGE}\` |
+          | Tag | \`${RELEASE_TAG}\` |
+          | 预发布 | ${IS_PRERELEASE} |
+
+          ${PRE_NOTE}
+
+          ### 合并后会发生什么
+
+          合并这个 PR 到 \`${BASE}\` 后，\`release-tag\` workflow 会自动：
+
+          1. 校验版本号并打 tag \`${RELEASE_TAG}\`
+          2. 构建 Windows / Linux 全部产物
+          3. 创建 GitHub Release 并上传附件
+          4. 同步推送到 CNB 并创建 CNB Release
+
+          ### 检查清单
+
+          - [ ] 版本号符合预期（阶段序 dev < beta < RC < rel）
+          - [ ] CHANGELOG / 发布说明已更新（如有需要）
+
+          ---
+          *此 PR 由 \`release-prepare\` workflow 自动创建。*
+          EOF
+
+          # 如果同分支的 PR 已存在就更新，避免重复报错
+          EXISTING=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [[ -n "$EXISTING" ]]; then
+            echo "PR #$EXISTING 已存在，更新标题和内容"
+            gh pr edit "$EXISTING" --title "chore(release): ${APP_VERSION}" --body-file /tmp/pr-body.md
+          else
+            gh pr create \
+              --base "$BASE" \
+              --head "$BRANCH" \
+              --title "chore(release): ${APP_VERSION}" \
+              --body-file /tmp/pr-body.md
+          fi
+
+      - name: 汇总
+        if: always()
+        run: |
+          echo "### 发版准备结果" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ steps.check.outputs.changed }}" == "true" ]]; then
+            echo "- 版本：\`${{ env.VERSION_PREV }}\` → \`${{ env.APP_VERSION }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- 分支：\`${{ steps.branch.outputs.branch }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- 合并后自动打 tag：\`${{ env.RELEASE_TAG }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- 无需发版（版本号未变化或提交信息不是发版前缀）" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -193,6 +193,35 @@ echo "=== 执行 ==="
 echo "任务: ${TASKS[*]} ${GRADLE_ARGS[*]}"
 echo ""
 
+# ---------------------------------------------------------------------------
+# 先跑打包脚本自己的单元测试
+# ---------------------------------------------------------------------------
+#
+# 这些是纯 Python，几毫秒就跑完，但价值不低：
+# bump-version 决定发布版本号，算错了（比如 0.1-RC1 打 beta: 时
+# 没报错反而给了 0.1-beta2）会直接发出一个不该存在的版本，事后删除
+# 已发布的 tag 和 Release 都很麻烦。
+#
+# 放在 Gradle 之前：如果版本逻辑坏了，没必要等几分钟编译。
+#
+if compgen -G "$PWD/scripts/test-*.py" > /dev/null; then
+    echo "[0] 脚本单元测试"
+    # 一次运行，把输出存下来：成功时只显示摘要，失败时全部打出来。
+    # 跑两次只是为了同时看到输出和退出码，那是浪费。
+    for t in "$PWD"/scripts/test-*.py; do
+        echo "  -> $(basename "$t")"
+        if python3 "$t" > /tmp/hmylx-pytest.log 2>&1; then
+            tail -3 /tmp/hmylx-pytest.log | sed 's/^/     /'
+        else
+            echo "     ✗ 失败，完整输出：" >&2
+            sed 's/^/     /' /tmp/hmylx-pytest.log >&2
+            exit 1
+        fi
+    done
+    echo "  ✓ 全部通过"
+    echo ""
+fi
+
 if [[ "$DO_CLEAN" == "1" ]]; then
     # clean 单独跑：和 build 拼成一条命令时，任务图里已经算好的
     # build/ 路径会被 clean 删掉，偶发 "output dir does not exist"。

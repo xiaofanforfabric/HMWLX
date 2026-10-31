@@ -42,3 +42,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+# Python 字节码（scripts/*.py 产生的）
+__pycache__/
+*.pyc
