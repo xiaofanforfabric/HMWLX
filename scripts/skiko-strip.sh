@@ -76,8 +76,15 @@ echo "==> skiko $SKIKO_VERSION / 目标平台 $PLATFORM"
 #   3. maven.aliyun.com    阿里云，国内最快，CI 上通常不经 429
 #   4. repo.maven.apache.org  官方备用域名，限流策略与 repo1 独立
 #
-# 每次尝试后校验文件大小（> 1MB），防止把 429 的 HTML 错误页
-# 当成 jar 存下来 —— 那样会在后面 unzip 时谜之失败。
+# 校验方式：unzip -t 而不是只看大小。
+#
+# 惨痛教训：CI 上 429 重试后拿到了「部分内容」，10.5MB（真实 24MB），
+# 大小阈值 1MB 轻松通过，unzip -t 也报 OK（它只校验已写入的成员），
+# 结果嵌进 jar 后才发现 dll 是空的，报
+#   「build/win-payload/hmwlx.jar 内缺少 skiko-windows-x64.dll」。
+#
+# 所以：解到临时目录，确认能解出非空的原生文件，才算下载成功。
+# 缓存命中也要过这一关 —— 上次失败留下的残包不能再被信任。
 #
 CACHE="dist/cache"
 mkdir -p "$CACHE"
@@ -95,11 +102,59 @@ MIRRORS+=(
   "https://repo.maven.apache.org/maven2"
 )
 
-MIN_BYTES=1000000
+# 判断一个 jar 是否可用。
+#
+# 踩过的两个坑，都发生在 CI：
+#   1. 429 重试后拿到 10.5MB 的包（真实 24MB），大小阈值 1MB 轻松放行；
+#   2. unzip -t / unzip -o 对「尾部截断」的 zip 也可能不报错 ——
+#      它把中央目录里已存在的成员解出来了就认为成功。
+#   结果嵌进 jar 后 dll 是空的，直到最后校验才报
+#     「内缺少 skiko-windows-x64.dll」，白烧 50 秒。
+#
+# 可靠的判据是四个一起看：
+#   a. zipinfo -t 能过（CRC 全对）
+#   b. 每个声明成员的长度与实际解出的字节数一致
+#   c. 能解出**非空**的 .dll/.so/.dylib
+#   d. 文件尾部有中央目录结束标记（PK\x05\x06）
+#
+# $1 = jar 路径。返回 0 表示可用。
+skiko_jar_ok() {
+  local jar="$1" d
+  [[ -f "$jar" ]] || return 1
 
-if [[ -f "$SKIKO_JAR" ]] && [[ "$(stat -c%s "$SKIKO_JAR" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
+  # d. 尾部要有 EOCD 签名。截断包最典型的特征就是尾部数据没了。
+  #    从最后 64KB 里找，兼容带注释的 zip。
+  local tail_hex
+  tail_hex="$(tail -c 65536 "$jar" 2>/dev/null | od -An -tx1 -v | tr -d ' \n')"
+  [[ "$tail_hex" == *504b0506* ]] || return 1
+
+  # a. CRC 全对
+  zipinfo -t "$jar" >/dev/null 2>&1 || return 1
+
+  # b+c. 真解一遍，成员完整且原生库非空
+  d="$(mktemp -d)"
+  if ! unzip -o -q "$jar" -d "$d" >/dev/null 2>&1; then
+    rm -rf "$d"; return 1
+  fi
+
+  local found=0
+  while IFS= read -r f; do
+    if [[ -s "$f" ]]; then found=1; break; fi
+  done < <(find "$d" -maxdepth 1 -type f \( -name '*.dll' -o -name '*.so' -o -name '*.dylib' \) 2>/dev/null)
+
+  rm -rf "$d"
+  return $((1 - found))
+}
+
+if skiko_jar_ok "$SKIKO_JAR"; then
   echo "==> 使用已缓存的 skiko-$PLATFORM-$SKIKO_VERSION.jar"
 else
+  # 缓存里的包不完整（上次下载被截断），删掉重下
+  if [[ -f "$SKIKO_JAR" ]]; then
+    echo "==> 缓存包不完整（$(stat -c%s "$SKIKO_JAR" 2>/dev/null || echo 0) 字节），丢弃重下"
+    rm -f "$SKIKO_JAR"
+  fi
+
   echo "==> 下载 skiko-awt-runtime-$PLATFORM"
   ok=0
   for base in "${MIRRORS[@]}"; do
@@ -111,12 +166,19 @@ else
     for attempt in 1 2 3; do
       if curl -fL -sS --connect-timeout 20 --max-time 300 \
               -o "$SKIKO_JAR.part" "$url" 2>/tmp/skiko-curl.$$.log; then
-        if [[ "$(stat -c%s "$SKIKO_JAR.part" 2>/dev/null || echo 0)" -gt "$MIN_BYTES" ]]; then
+        # 不只是看大小：真解一遍，确认原生库非空
+        if skiko_jar_ok "$SKIKO_JAR.part"; then
           mv "$SKIKO_JAR.part" "$SKIKO_JAR"
           ok=1
           break 2
         fi
-        echo "      文件太小（可能是错误页），换镜像"
+        echo "      包不完整（$(stat -c%s "$SKIKO_JAR.part" 2>/dev/null || echo 0) 字节），重试"
+        rm -f "$SKIKO_JAR.part"
+        # 截断一般是传输中断，同一个镜像再试一次往往就好了
+        if [[ $attempt -lt 3 ]]; then
+          sleep 2
+          continue
+        fi
         break
       else
         # curl -f 的报错行形如：
@@ -140,7 +202,7 @@ else
 
   if [[ "$ok" -ne 1 ]]; then
     rm -f /tmp/skiko-curl.$$.log
-    echo "错误：所有镜像都拿不到 skiko-$PLATFORM。" >&2
+    echo "错误：所有镜像都拿不到完整的 skiko-$PLATFORM。" >&2
     echo "  试过的：${MIRRORS[*]}" >&2
     echo "  可以用 SKIKO_MIRROR_BASE=<前缀> 指定镜像。" >&2
     exit 1
@@ -186,10 +248,6 @@ else
   echo "    （jar 内没有原生库，跳过）"
 fi
 
-if [[ "$OUT_JAR" != "$JAR" ]]; then
-  cp "$JAR" "$OUT_JAR"
-fi
-
 # zip 要在解包目录里执行（用相对文件名），所以目标路径先转成绝对路径
 case "$OUT_JAR" in
   /*) ABS_OUT="$OUT_JAR" ;;
@@ -197,7 +255,37 @@ case "$OUT_JAR" in
 esac
 
 echo "==> 嵌入 $PLATFORM 的原生库"
-( cd "$TMP" && zip -q -X "$ABS_OUT" "${NEW_FILES[@]}" )
+#
+# 不在目标位置原地更新，而是先在工作临时文件里做完再一次性拷回去。
+#
+# 原因：CI（CNB）的工作区文件系统对「大文件原地重写」很不友好 ——
+# zip 更新 119MB 的 jar 时要把整个中央目录重写一遍，在那里会失败。
+# 而 /tmp 是容器本地盘，同样的操作毫无问题。
+#
+# 之前没检查 zip 的返回值，失败被静默吞掉，一直跑到最后校验才报
+# 「缺少 xxx.dll」，看着像下载坏了，其实下载好好的，是写入失败。
+#
+WORK_JAR="$(mktemp "${TMPDIR:-/tmp}/hmwlx-skiko-XXXXXX.jar")"
+if ! cp "$JAR" "$WORK_JAR"; then
+  echo "错误：无法创建临时 jar（$WORK_JAR）" >&2
+  exit 1
+fi
+
+if ! ( cd "$TMP" && zip -q -X "$WORK_JAR" "${NEW_FILES[@]}" ); then
+  echo "错误：zip 嵌入原生库失败（临时文件 $WORK_JAR）" >&2
+  df -h "${TMPDIR:-/tmp}" 2>/dev/null | sed 's/^/    /' >&2
+  rm -f "$WORK_JAR"
+  exit 1
+fi
+
+# 拷回目标位置
+if ! cp "$WORK_JAR" "$ABS_OUT"; then
+  echo "错误：无法写回 $ABS_OUT" >&2
+  df -h "$(dirname "$ABS_OUT")" 2>/dev/null | sed 's/^/    /' >&2
+  rm -f "$WORK_JAR"
+  exit 1
+fi
+rm -f "$WORK_JAR"
 
 # ---------------------------------------------------------------- 校验
 fail=0
