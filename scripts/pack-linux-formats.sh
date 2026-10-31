@@ -34,9 +34,10 @@ set -euo pipefail
 # 脚本在 scripts/ 下，项目根目录是它上一级
 cd "$(dirname "$(readlink -f "$0")")/.."
 
-APP_NAME="HMWLX"
-PKG_NAME="hmwlx"          # DEB 包名必须全小写（Debian 政策）
-
+# 打印脚本指纹：CI 里报行号但看不出跑的是哪份代码时，
+# 对着这个 SHA 就能确认有没有拿错旧副本。
+# （踩过这个坑：日志报 line 353 的旧错误，实际远端早已修好）
+echo "→ pack-linux-formats.sh @ $(sha256sum "$PWD/scripts/pack-linux-formats.sh" | cut -c1-12)"
 # 版本号唯一来源：gradle.properties 的 appVersion。
 # 提供 APP_VERSION（原始，如 0.1-dev）、
 #     DEB_VERSION（0.1~dev，Debian 用 ~ 表示预发布，排序低于正式版）、
@@ -350,6 +351,12 @@ DESKTOP
         # 注意没有 Source0：不经过 %prep/%setup，%install 直接
         # 从 STAGE 目录 cp -a 进 buildroot。这是"预构建产物"打包
         # 的标准做法（类似 Go/Rust 二进制），也避开了 tar。
+        #
+        # 写 spec 前先确认 RPM_STAGE 有值：spec 是无引号 heredoc，
+        # shell 会当场展开 ${RPM_STAGE}。要是它没定义，set -u 会让
+        # 整个脚本崩在这里，报错行号指向 cat 那一行，看不出真凶。
+        # 显式检查一次，报错就直接点出变量名。
+        : "${RPM_STAGE:?RPM_STAGE 未定义（RPM 暂存目录）}"
         cat > "$RPM_TOP/SPECS/${PKG_NAME}.spec" <<SPEC
 Name:           ${PKG_NAME}
 Version:        ${RPM_VERSION}
