@@ -27,16 +27,20 @@
   push:
     - name: ci
       docker:
-        # 打包环境镜像：JDK 25 + zig 0.13 + rpm/zip 等工具。
+        # 打包环境镜像：JDK 25 + mingw-w64 + gcc + rpm/zip/python3。
         # 见 docker/build-env.Dockerfile。
         #
-        # 为什么用 docker.build 而不是现成镜像：zig 的 tarball 解开是
-        # 16000+ 个小文件，CNB 构建机的存储扛不住这种一次性大量写入
-        # （报 ENOSYS）。而 docker build 的层是普通 overlayfs，
-        # 解压毫无压力；且 CNB 按 Dockerfile 内容哈希缓存镜像，
-        # 构建一次之后每次 CI 直接命中，连下载都省了。
+        # 为什么用 docker.build 而不是现成镜像：
+        #   基础镜像（eclipse-temurin:25-jdk）不带 mingw-w64、rpm、zip 等，
+        #   每次 stage 里 apt install 要几十秒且受 apt 源影响。
+        #   焊进镜像后 CNB 按 Dockerfile 内容哈希缓存，构建一次就永久命中。
         #
-        # 建镜像时改了 Dockerfile 才会重建，改业务代码不受影响。
+        # 为什么不用 zig 交叉编译：
+        #   zig 发行包解出来 16000+ 个小文件，而 CNB 的 /workspace 在
+        #   OverlayFS 上，对这种批量写入会报 ENOSYS。换目录、换镜像源、
+        #   稀疏解压、分段写、docker build 全试过，无效。
+        #   反证：同一环境里 apt install（dpkg 路径）装 160 个包毫无问题。
+        #   sfx.c 只是普通 C，mingw/gcc 编出来的产物完全等价。
         build: docker/build-env.Dockerfile
         # 中文测试名 -> 中文报告文件名，文件名编码必须是 UTF-8
         env:
@@ -45,6 +49,24 @@
         volumes:
           # Gradle 缓存跨构建复用，避免每次重下依赖
           - main:/root/.gradle:copy-on-write
+
+          # /tmp 挂成 data 卷（节点本地盘），避开 /workspace 的 OverlayFS 限制。
+          #
+          # 为什么必须这样做：
+          #   /workspace 在这个平台上落在 OverlayFS 上（文档「流水线缓存」
+          #   一节提到 copy-on-write 就是基于 OverlayFS）。对这种下层目录
+          #   做批量 stat/创建，会返回 ENOSYS：
+          #     tar: ./opt/hmwlx/runtime/lib/server/libjvm.so:
+          #          Cannot stat: Function not implemented
+          #   之前四次踩坑（zig 解压、zip 更新大 jar、skiko 嵌入、
+          #   dpkg-deb 打包）根因全是这一个。
+          #
+          #   而 /tmp 是 tmpfs / 节点本地盘，不在 overlay 层，一切正常。
+          #   脚本里已经优先用 $TMPDIR 做暂存，这里把它显式声明成 data 卷，
+          #   不依赖「碰巧 /tmp 能用」。
+          #
+          # data 卷的语义正好合适：结束时自动清理，不占跨构建缓存。
+          - /tmp:data
       stages:
         # 图形库（libGL / X11 / 字体）已经在 docker/build-env.Dockerfile 里
         # 装好了，这里不再单独补 —— 每个 stage 用的是同一个镜像，
@@ -166,7 +188,7 @@
   pull_request:
     - name: pr-check
       docker:
-        # 与 push 用同一个打包环境镜像（JDK 25 + zig + 图形库 + rpm）。
+        # 与 push 用同一个打包环境镜像（JDK 25 + mingw-w64 + gcc + rpm）。
         # 同一个 Dockerfile 哈希 → 同一个缓存镜像，不会重复构建。
         build: docker/build-env.Dockerfile
         # 中文测试名 -> 中文报告文件名，文件名编码必须是 UTF-8
@@ -176,6 +198,8 @@
         volumes:
           # PR 场景缓存只读，避免并发写入冲突
           - main:/root/.gradle:copy-on-write-read-only
+          # 同 push：/tmp 挂节点本地盘，避开 /workspace 的 OverlayFS 限制
+          - /tmp:data
       stages:
         # 图形库已装进镜像，不需要单独补 stage（同 push 分支）。
 

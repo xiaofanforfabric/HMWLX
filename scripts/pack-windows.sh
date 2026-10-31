@@ -33,11 +33,18 @@ cd "$ROOT"
 # 同时提供 $FAT_JAR（根据版本拼出的构建产物路径）。
 # shellcheck source=./version.sh
 source "$ROOT/scripts/version.sh"
-STAGE_DIR="build/win-payload"          # 待嵌入的目录（exe 内不含这个结构）
+STAGE_DIR="${TMPDIR:-/tmp}/hmwlx-win-payload-$$"  # 待嵌入的目录（exe 内不含这个结构）
 EXE_OUT="dist/HMWLX-${APP_VERSION}-win-x64.exe"
 ZIP_OUT="dist/HMWLX-${APP_VERSION}-win-x64.zip"
 JRE_URL="https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jre_x64_windows_hotspot_25.0.5_8.zip"
 JRE_CACHE="dist/cache/temurin25-win-jre.zip"
+
+# 载荷目录放 $TMPDIR 而不是 build/：
+#   make-sfx.py 要遍历这几百个文件算 LZMA 索引，而 CI 的 /workspace
+#   在 OverlayFS 上，批量 stat 会报 ENOSYS（dpkg-deb 就是这么挂的）。
+#   $TMPDIR 是容器本地盘（.cnb.yml 里显式挂成 data 卷），没这个问题。
+cleanup_stage() { rm -rf "$STAGE_DIR"; }
+trap cleanup_stage EXIT
 
 WANT_ZIP=false
 [[ "${1:-}" == "--zip" ]] && WANT_ZIP=true
