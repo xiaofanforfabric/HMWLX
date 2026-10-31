@@ -166,10 +166,14 @@
             # 重试解压，适合本地开发。
             export HMWLX_ZIG_DIR=/usr/local/zig
 
-            # 镜像：CNB 节点直连 ziglang.org 只有 ~5MB/s（慢的时候掉到 1MB/s），
-            # 44MB 白白陪几十秒。npmmirror 是同一份 tarball 的国内 CDN，
-            # 脚本按顺序试、校验大小之后才用，下不来就自动退回官方。
-            export HMWLX_ZIG_MIRROR=https://npmmirror.com/mirrors/zig
+            # 镜像：CNB 节点直连 ziglang.org 实测 ~5MB/s，44MB 约 9 秒，
+            # 够用。华为云是官方 tarball 的镜像副本，脚本按顺序试、
+            # 校验大小之后才用，down 不下来就自动退回官方。
+            #
+            # 别用 npmmirror 的 /mirrors/zig：它 302 到
+            # cdn.npmmirror.com/binaries/zig/… 后是 NoSuchKey 404，
+            # 只会让每次构建先吃一个必然失败的请求。
+            export HMWLX_ZIG_MIRROR=https://mirrors.huaweicloud.com/zig
 
             ZIG_DIR="$(./scripts/install-zig.sh --path)"
             export PATH="$ZIG_DIR:$PATH"
