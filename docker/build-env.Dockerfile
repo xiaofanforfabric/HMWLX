@@ -49,6 +49,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl \
+        python3 \
         build-essential gcc binutils \
         mingw-w64 \
         zip unzip rpm xz-utils file fakeroot \
@@ -61,22 +62,40 @@ RUN set -eux; \
 # ------------------------------------------------------------------ 自检
 #
 # 构建镜像时就验证一遍：环境不对在这里失败，比跑到打包第 3 步
-# 才发现缺 rpmbuild 要好定位得多。
+# 才发现缺东西要好定位得多 —— 每次踩这种坑都要白等一整轮 CI。
 #
-# 特意真的编一个最小的 Windows GUI 程序：光有 x86_64-w64-mingw32-gcc
-# 不够，还要 libcomctl32.a（进度条用）之类在。缺了会在这里就暴露。
+# 检查清单来自实际使用：把 scripts/*.sh 和 scripts/*.py 里出现的
+# 外部命令全列出来逐个验证，缺一个就列出来（不是遇到第一个就退出，
+# 这样一次能看到所有缺口，不用来回试）。
+#
+# 特意做的两件「真事」：
+#   1. 真的编一个最小 Windows GUI 程序 —— 光有 x86_64-w64-mingw32-gcc
+#      不够，还要 libcomctl32.a（进度条用）。缺了会在这里暴露。
+#   2. 真的 import 一遍 lzma/hashlib/struct —— make-sfx.py 靠它们压缩
+#      和写索引。都是标准库，但某些精简镜像会把 lzma 裁掉。
+#
 RUN set -eux; \
-    java -version; \
-    javac -version; \
-    command -v jlink; \
-    command -v rpmbuild; \
-    command -v zip; \
-    command -v file; \
-    command -v gcc; \
-    x86_64-w64-mingw32-gcc --version | head -1; \
+    missing=""; \
+    for c in \
+        java javac jlink \
+        gcc strip objdump \
+        x86_64-w64-mingw32-gcc \
+        python3 \
+        zip unzip rpm rpmbuild \
+        xz tar gzip file fakeroot \
+        curl sed awk grep find sort cut tr head tail \
+        stat du df mktemp readlink sha256sum \
+    ; do \
+        command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; \
+    done; \
+    if [ -n "$missing" ]; then \
+        echo "错误：镜像缺少命令:$missing" >&2; \
+        exit 1; \
+    fi; \
+    python3 -c 'import lzma, hashlib, struct; print("python3 标准库 lzma/hashlib/struct 可用")'; \
     printf '#include <windows.h>\n#include <commctrl.h>\nint main(void){return 0;}\n' > /tmp/t.c; \
     x86_64-w64-mingw32-gcc -mwindows -lcomctl32 -o /tmp/t.exe /tmp/t.c; \
-    file /tmp/t.exe; \
+    file /tmp/t.exe | grep -q "PE32+ executable" || { echo "错误：mingw 产物不是 PE32+" >&2; exit 1; }; \
     rm -f /tmp/t.c /tmp/t.exe; \
     echo "构建环境自检通过"
 

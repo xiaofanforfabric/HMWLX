@@ -188,6 +188,16 @@ done
 echo "    载荷: $(du -sh "$STAGE_DIR" | cut -f1) / $(find "$STAGE_DIR" -type f | wc -l) 个文件"
 
 # ---------------------------------------------------------------- 合成 exe
+#
+# make-sfx.py 用到 python3 的 lzma 模块（标准库）。缺 python3 时
+# 报错必须发生在压缩之前 —— 否则前面下载 JRE、组装载荷白干几分钟，
+# 最后才在 'python3: command not found' 上失败。
+command -v python3 >/dev/null 2>&1 || {
+  echo "错误：找不到 python3（合成自解压 exe 需要它）" >&2
+  echo "  CI 镜像：检查 docker/build-env.Dockerfile 是否装了 python3" >&2
+  echo "  本地：apt-get install -y python3" >&2
+  exit 1
+}
 echo "==> LZMA 压缩并追加到 exe（较慢，约 1-3 分钟）"
 python3 scripts/make-sfx.py \
   --stub "$STUB" \

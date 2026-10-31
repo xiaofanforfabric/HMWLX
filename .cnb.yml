@@ -115,7 +115,7 @@
             #
             # 这里只做存在性检查：缺东西就立刻报错，别拖到打包第 3 步
             # 才发现没有 rpmbuild。
-            for cmd in zip unzip rpmbuild xz file jlink; do
+            for cmd in zip unzip rpmbuild xz file jlink python3; do
               command -v "$cmd" >/dev/null 2>&1 || {
                 echo "错误：镜像里缺少 $cmd，请检查 docker/build-env.Dockerfile" >&2
                 exit 1
