@@ -152,13 +152,19 @@
 
             # zig：官方 tarball，0.13.0 是本地验证过的版本。
             #
-            # 不直接 tar 解压：zig 解开是 16000+ 个小文件，CNB 的
-            # $HOME 和 /tmp 都是 overlay 挂载，批量创建随机报
-            # "Function not implemented" 并卡 3 分钟才失败。
+            # zig 解开是 16000+ 个小文件，CNB 上好几个位置都撑不住这种
+            # 批量创建：$HOME、/tmp 是 overlay 挂载，随机报
+            # "Function not implemented"（ENOSYS）并卡 3 分钟才失败；
+            # 工作区 /workspace 也不行 —— 它是专门优化「海量小文件 commit」
+            # 的存储，tar 展开 lib/std 时照样 ENOSYS。
             #
-            # install-zig.sh 会按「项目目录 > /tmp > $HOME」的顺序探测，
-            # 默认装到 ./.tooling/zig —— 那是工作区真实盘，文件系统
-            # 语义正常，能容纳这种大量小文件的解压。
+            # 所以这里显式指定 /usr/local/zig：容器层是可写 overlayfs，
+            # 走的是本地盘，13000+ 小文件写进去没问题。显式指定同时也
+            # 表示「构建机可丢弃」，不必追求跨构建复用。
+            #
+            # 不设 HMWLX_ZIG_DIR 时，install-zig.sh 会自动逐个候选位置
+            # 重试解压，适合本地开发。
+            export HMWLX_ZIG_DIR=/usr/local/zig
             ZIG_DIR="$(./scripts/install-zig.sh --path)"
             export PATH="$ZIG_DIR:$PATH"
             echo "zig: $(zig version)"
