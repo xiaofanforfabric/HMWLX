@@ -38,6 +38,10 @@ cd "$(dirname "$(readlink -f "$0")")/.."
 # 对着这个 SHA 就能确认有没有拿错旧副本。
 # （踩过这个坑：日志报 line 353 的旧错误，实际远端早已修好）
 echo "→ pack-linux-formats.sh @ $(sha256sum "$PWD/scripts/pack-linux-formats.sh" | cut -c1-12)"
+
+APP_NAME="HMWLX"
+PKG_NAME="hmwlx"          # DEB 包名必须全小写（Debian 政策）
+
 # 版本号唯一来源：gradle.properties 的 appVersion。
 # 提供 APP_VERSION（原始，如 0.1-dev）、
 #     DEB_VERSION（0.1~dev，Debian 用 ~ 表示预发布，排序低于正式版）、
