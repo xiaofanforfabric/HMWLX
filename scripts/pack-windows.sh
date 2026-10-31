@@ -52,11 +52,12 @@ ZIG="${ZIG:-}"
 if [[ -z "$ZIG" ]]; then
   if command -v zig >/dev/null 2>&1; then
     ZIG="$(command -v zig)"
-  elif _zd="$(bash scripts/install-zig.sh --path 2>/dev/null)" && [[ -x "$_zd/zig" ]]; then
+  elif _zd="$(bash scripts/install-zig.sh --quiet)" && [[ -x "$_zd/zig" ]]; then
     ZIG="$_zd/zig"
   else
+    # 同 pack-linux.sh：别把 install-zig.sh 的失败诊断丢进 /dev/null。
     echo "错误：找不到 zig。请设置 ZIG=/path/to/zig" >&2
-    echo "  或跑 ./scripts/install-zig.sh 自动装" >&2
+    echo "  或跑 ./scripts/install-zig.sh 自动装（会打印失败原因）" >&2
     exit 1
   fi
 fi

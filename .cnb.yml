@@ -165,6 +165,12 @@
             # 不设 HMWLX_ZIG_DIR 时，install-zig.sh 会自动逐个候选位置
             # 重试解压，适合本地开发。
             export HMWLX_ZIG_DIR=/usr/local/zig
+
+            # 镜像：CNB 节点直连 ziglang.org 只有 ~5MB/s（慢的时候掉到 1MB/s），
+            # 44MB 白白陪几十秒。npmmirror 是同一份 tarball 的国内 CDN，
+            # 脚本按顺序试、校验大小之后才用，下不来就自动退回官方。
+            export HMWLX_ZIG_MIRROR=https://npmmirror.com/mirrors/zig
+
             ZIG_DIR="$(./scripts/install-zig.sh --path)"
             export PATH="$ZIG_DIR:$PATH"
             echo "zig: $(zig version)"
