@@ -20,26 +20,27 @@
 # 解压位置的选择顺序
 # ==========================================================================
 #
-#   1. $HMWLX_ZIG_DIR         显式指定（CI 里可以精确控制）
-#   2. $PWD/.tooling/zig      项目同目录 —— 默认首选
-#   3. /tmp/hmwlx-zig         /tmp 兜底，但要小心：CNB 的 /tmp 是
-#                             overlay 挂载，同样不支持批量小文件
-#   4. $HOME/.local/opt       最后的兜底
+#   1. $HMWLX_ZIG_DIR             显式指定（CI 里可以精确控制）
+#   2. $ROOT/.tooling/zig         项目同目录 —— 本地默认首选
+#   3. /tmp/hmwlx-zig             /tmp 兜底，但要小心：CNB 的 /tmp 常是
+#                                 overlay 挂载，同样不支持批量小文件
+#   4. $HOME/.local/opt           最后的兜底
+#   5. $HOME/.cache/hmwlx-zig     **最后**才试：CI 上那一堆 ENOSYS 都是从
+#                                 $HOME 报出来的，别让它抢在前面
 #
 # 为什么项目目录排第一：
-#   仓库所在的盘是真实工作区的盘，一定有正常文件系统语义。
-#   而且 zig 解到项目里，反复跑脚本不用重新下载解压，
-#   也方便本地调试。.tooling/ 已加进 .gitignore。
+#   本地开发和 CNB 一样，仓库就是普通的 git 工作区，文件系统语义正常；
+#   zig 解到项目里，反复跑脚本不用重新下载解压，也方便调试。
 #
-#   /tmp 在容器里经常是 overlayfs 或内存盘，对「一次创建上千个小文件」
-#   这种模式支持很差 —— CNB 上就是这样：mkdir 能过，真解压就 ENOSYS。
+# 注意：CNB 构建里 $ROOT（/workspace）本身也可能挂在不支持批量建文件的
+# 存储上 —— 那份存储专门为「频繁 commit 几百万文件」做过优化，代价就是
+# tar 展开 zig 的 16000 个小文件时直接 ENOSYS。所以这里不能死认项目目录：
 #
-# 每个位置都会先做一次「能不能创建 13000 个文件」的快速探测：
-# 建 200 个空文件试试，不行就换下一个。比解压到一半失败快得多。
-#
-# 注意：探测通过 ≠ 解压一定成功。CNB 上 200 个平铺文件能过，
-# 但 tar 展开 lib/std 那 16000 个嵌套文件就挂了。所以探测只是
-# 快速排除明显不可用的位置，真正的保险是「项目目录排第一」。
+#   - CNB CI 里由 .cnb.yml 通过 HMWLX_ZIG_DIR 明确指向 /usr/local（容器层，
+#     真实文件系统），见那边的注释；
+#   - 探测只验证「建 200 个平铺文件 + 几层 mkdir」，而 tar 展开的是上万层
+#     嵌套小文件，探测通过 ≠ 解压一定成功。因此解压会逐个候选位置重试，
+#     失败就清干净换下一个，而不是一次失败就整体退出。
 #
 # ==========================================================================
 # 用法
@@ -100,11 +101,13 @@ probe_dir() {
 # ---------------------------------------------------------------- 候选位置
 candidates=()
 [[ -n "${HMWLX_ZIG_DIR:-}" ]] && candidates+=("$HMWLX_ZIG_DIR")
-# 项目同目录优先：这里的文件系统一定支持正常语义
+# 项目同目录优先：本地开发时这里就是普通工作区
 candidates+=("$ROOT/.tooling/zig")
 # /tmp 兜底但靠后：容器里常是 overlayfs，批量小文件会 ENOSYS
 candidates+=("/tmp/hmwlx-zig")
 candidates+=("${HOME:-/root}/.local/opt")
+# $HOME 放最后：CNB 上 ENOSYS 就是从这里报出来的
+candidates+=("${HOME:-/root}/.cache/hmwlx-zig")
 
 # ---------------------------------------------------------------- 已装好？
 for dir in "${candidates[@]}"; do
@@ -119,23 +122,6 @@ for dir in "${candidates[@]}"; do
         fi
     fi
 done
-
-# ---------------------------------------------------------------- 选位置
-TARGET=""
-for dir in "${candidates[@]}"; do
-    info "探测 $dir …"
-    if probe_dir "$dir"; then
-        TARGET="$dir"
-        info "  可用"
-        break
-    else
-        info "  不可用（文件系统不支持批量小文件），换下一个"
-    fi
-done
-
-[[ -n "$TARGET" ]] || die "所有候选位置都不可用。
-  试过的：${candidates[*]}
-  可以用 HMWLX_ZIG_DIR=/some/path 指定一个可写目录。"
 
 # ---------------------------------------------------------------- 下载
 #
@@ -158,25 +144,47 @@ else
 fi
 
 # ---------------------------------------------------------------- 解压
-info "解压到 $TARGET"
-mkdir -p "$TARGET"
-# -xJf 里的 J 是 xz；CNB 日志显示它卡在逐个建文件上，
-# 所以这里先确认 xz 命令存在，缺了会给出更明确的错误。
+#
+# 探测通过的位置也可能解压到一半 ENOSYS，所以这里逐个候选位置真试一遍：
+# 失败就把半成品删掉换下一个。tar 的报错有上万行，只留最后 5 行提示。
 command -v xz > /dev/null 2>&1 || die "缺少 xz 命令（apt install xz-utils）"
 
-tar -xJf "$CACHE" -C "$TARGET"
+ZIG_BIN=""
+for dir in "${candidates[@]}"; do
+    info "探测 $dir …"
+    if ! probe_dir "$dir"; then
+        info "  不可用（文件系统不支持批量小文件），换下一个"
+        continue
+    fi
 
-ZIG_BIN="$TARGET/$EXTRACTED_DIR/zig"
-[[ -x "$ZIG_BIN" ]] || die "解压后找不到 $ZIG_BIN"
+    info "  可用，解压到 $dir"
+    rm -rf "${dir:?}/$EXTRACTED_DIR"
+    mkdir -p "$dir"
+    if tar -xJf "$CACHE" -C "$dir" 2>"$CACHE.tar.log"; then
+        ZIG_BIN="$dir/$EXTRACTED_DIR/zig"
+        [[ -x "$ZIG_BIN" ]] && break
+        info "  解压后找不到 zig 可执行文件，换下一个"
+    else
+        info "  解压失败（$(grep -c 'Function not implemented' "$CACHE.tar.log" 2>/dev/null || echo 0) 个 ENOSYS），换下一个"
+        tail -n 5 "$CACHE.tar.log" | sed 's/^/    /' >&2
+    fi
+    # 清掉半成品，否则下次的「已装好？」检查可能撞见残缺目录
+    rm -rf "${dir:?}/$EXTRACTED_DIR"
+    ZIG_BIN=""
+done
+
+[[ -n "$ZIG_BIN" ]] || die "所有候选位置都无法解压 zig。
+  试过的：${candidates[*]}
+  可以用 HMWLX_ZIG_DIR=/some/path 指定一个可写目录。"
 
 info "验证"
 "$ZIG_BIN" version >&2
 
 if [[ "${1:-}" == "--path" ]]; then
-    echo "$TARGET/$EXTRACTED_DIR"
+    echo "$(dirname "$ZIG_BIN")"
 else
     echo ""
-    echo "zig 已安装：$TARGET/$EXTRACTED_DIR"
+    echo "zig 已安装：$(dirname "$ZIG_BIN")"
     echo "加到 PATH："
-    echo "  export PATH=\"$TARGET/$EXTRACTED_DIR:\$PATH\""
+    echo "  export PATH=\"$(dirname "$ZIG_BIN"):\$PATH\""
 fi
