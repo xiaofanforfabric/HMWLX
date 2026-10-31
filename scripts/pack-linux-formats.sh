@@ -19,7 +19,9 @@
 # 两种格式的定位差异（这不是可选项，是用户预期）
 # ---------------------------------------------------------------------------
 #
-# DEB = 安装包。用 dpkg -i 装，进系统菜单，能 apt remove 卸载。
+# DEB = 安装包。用 apt install ./xxx.deb 装（别用 dpkg -i，那个不处理
+# 依赖也不回滚，缺依赖时包会卡在「已解包未配置」状态）。进系统菜单，
+# 能 apt remove 卸载。
 #   适合"我愿意让它进系统"的用户。
 #
 # AppImage = 单文件便携。chmod +x 后双击运行，删文件即卸载。
@@ -145,6 +147,27 @@ DESKTOP
         # --- 控制信息 ---
         # Installed-Size 单位是 KB，dpkg 用它估算占用。
         INSTALLED_SIZE=$(du -sk "$DEB_ROOT/opt" | cut -f1)
+        #
+        # Depends 是实际必须的：
+        #   libskiko-linux-x64.so 用 ldd 查出来依赖 libX11 / libfontconfig /
+        #   libfreetype / libGL 等。这些不在包内 —— 我们只打包了 JRE 和
+        #   jar，原生图形库靠系统提供。
+        #
+        #   不声明的话，在一台精简系统（比如 docker 基础镜像、最小化
+        #   安装的服务器）上 dpkg -i 能成功，但一运行就
+        #     UnsatisfiedLinkError: libGL.so.1: cannot open shared object file
+        #   而且报错发生在 Compose 初始化阶段，堆栈很深，用户根本看不出
+        #   是缺系统库。
+        #
+        # 只写真正必须的四个，别贪多：
+        #   libx11-6          X11 客户端库（窗口系统）
+        #   libfontconfig1    字体配置
+        #   libfreetype6      字体渲染
+        #   libgl1            OpenGL —— Skiko 即使软件渲染也要链接它
+        #
+        # 不依赖 libglu1-mesa、libglx-mesa0 这些：它们由桌面环境按需装，
+        # 强依赖会让服务器上的安装变得臃肿。
+        #
         cat > "$DEB_ROOT/DEBIAN/control" <<CONTROL
 Package: ${PKG_NAME}
 Version: ${VERSION}
@@ -152,6 +175,7 @@ Section: games
 Priority: optional
 Architecture: amd64
 Installed-Size: ${INSTALLED_SIZE}
+Depends: libx11-6, libfontconfig1, libfreetype6, libgl1
 Maintainer: ${MAINTAINER}
 Homepage: ${HOMEPAGE}
 Description: ${DESCRIPTION}
@@ -277,6 +301,17 @@ License:        Proprietary
 URL:            ${HOMEPAGE}
 BuildArch:      x86_64
 AutoReqProv:    no
+# AutoReqProv: no 关掉了自动依赖探测（它会把包内 JRE 的 .so 当依赖，
+# 产生一堆不存在的包名）。所以系统库必须手写。
+#
+# 这些是 libskiko-linux-x64.so 用 ldd 查出来的硬依赖：
+#   libX11 X11 客户端库、fontconfig/freetype 字体、
+#   mesa-libGL OpenGL（Skiko 即使软件渲染也要链接）。
+# 不声明的话，精简系统上装完一跑就 UnsatisfiedLinkError。
+Requires:       libX11
+Requires:       fontconfig
+Requires:       freetype
+Requires:       mesa-libGL
 Source0:        %{name}-%{version}.tar.gz
 
 %description
@@ -430,6 +465,6 @@ echo ""
 echo "=== 完成 ==="
 ls -lh "${DIST_DIR}"/*.deb "${DIST_DIR}"/*.AppImage 2>/dev/null || true
 echo ""
-echo "DEB 安装   : sudo dpkg -i ${DIST_DIR}/${PKG_NAME}_${VERSION}_amd64.deb"
+echo "DEB 安装   : sudo apt install ./${DIST_DIR}/${PKG_NAME}_${VERSION}_amd64.deb"
 echo "DEB 卸载   : sudo apt remove ${PKG_NAME}"
 echo "AppImage   : chmod +x ${DIST_DIR}/${APP_NAME}-${VERSION}-x86_64.AppImage && ./${DIST_DIR}/${APP_NAME}-${VERSION}-x86_64.AppImage"
