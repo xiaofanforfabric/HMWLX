@@ -26,6 +26,20 @@
 "**":
   push:
     - name: ci
+      # 锁定 amd64 节点。
+      #
+      # 不写的话默认是 cnb:arch:default —— 文档没说明它到底是哪个架构。
+      # 而打包链路里有多处 amd64 假设：
+      #   - DEB 的 Architecture 字段硬编码 amd64
+      #   - AppImage / .run 产物名带 x86_64
+      #   - mingw 交叉编译虽然跨架构可行，但产物签名/校验按 x86_64 走
+      # 一旦被调度到 arm64 节点，会打出架构标错的包 —— 那种包能看到
+      # 却能装不上，比直接失败更糟。
+      #
+      # 明确写 amd64 还有一个好处：节点的 CPU 上限（1~64）比 arm64
+      # （1~16）高，打包这种 IO 密集任务更合适。
+      runner:
+        tags: cnb:arch:amd64
       docker:
         # 打包环境镜像：JDK 25 + mingw-w64 + gcc + rpm/zip/python3。
         # 见 docker/build-env.Dockerfile。
@@ -158,6 +172,19 @@
             echo "Windows 编译器: $(x86_64-w64-mingw32-gcc --version | head -1)"
             echo "Linux 编译器:   $(gcc --version | head -1)"
 
+            # 架构校验：产物里写死了 amd64 / x86_64（DEB 的 Architecture
+            # 字段、AppImage 文件名）。万一 runner.tags 没生效、被调度到
+            # arm64 节点，宁可这里直接失败，也别产出架构标错的包 ——
+            # 那种包能下载能看，却装不上，排查成本高得多。
+            host_arch="$(uname -m)"
+            if [ "$host_arch" != "x86_64" ]; then
+              echo "错误：需要 x86_64 构建节点，当前是 $host_arch" >&2
+              echo "  产物架构写死为 amd64，跑在 $host_arch 上会打出错包。" >&2
+              echo "  检查 .cnb.yml 的 runner.tags 是否为 cnb:arch:amd64。" >&2
+              exit 1
+            fi
+            echo "构建节点架构: $host_arch ✓"
+
             # 构建 fat jar（build.sh 会挑 JDK 25）
             ./scripts/build.sh --fast
 
@@ -187,6 +214,9 @@
 
   pull_request:
     - name: pr-check
+      # 同 push：锁定 amd64，理由见上方 ci pipeline 的注释
+      runner:
+        tags: cnb:arch:amd64
       docker:
         # 与 push 用同一个打包环境镜像（JDK 25 + mingw-w64 + gcc + rpm）。
         # 同一个 Dockerfile 哈希 → 同一个缓存镜像，不会重复构建。
