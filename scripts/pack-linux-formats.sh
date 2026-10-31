@@ -94,12 +94,31 @@ done
 #       ├── share/applications/   桌面菜单项
 #       └── share/icons/hicolor/  图标（多尺寸）
 # ===========================================================================
+# ---------------------------------------------------------------------------
+# 打包暂存目录放哪
+#
+# 不放 build/ 而放 $TMPDIR（通常是 /tmp）：
+#   dpkg-deb 和 rpmbuild 内部都要用 tar 遍历整个暂存树（runtime/ 有
+#   几百个文件）。CI（CNB）的工作区存储对这个操作报
+#     tar: ./opt/hmwlx/runtime/bin/java: Cannot stat: Function not implemented
+#   而同样的操作在容器本地盘（/tmp）完全正常 —— 和之前 zig 解压、
+#   zip 更新大 jar 是同一个存储限制。
+#
+# 所以：暂存全在 $TMPDIR 里做，做好的 .deb/.rpm 再拷回 dist/。
+# 这样工作区只承载最终产物（几个大文件），不承载「上万次小文件操作」。
+#
+STAGE_BASE="${TMPDIR:-/tmp}/hmwlx-stage-$$"
+mkdir -p "$STAGE_BASE"
+# 退出时清理暂存目录（几百 MB 的 runtime 副本，别留在 /tmp 里堆着）
+cleanup_stage() { rm -rf "$STAGE_BASE"; }
+trap cleanup_stage EXIT
+
 if [[ "$DO_DEB" == "true" ]]; then
     echo "→ 构建 DEB…"
     if ! command -v dpkg-deb >/dev/null; then
         echo "  跳过：系统没有 dpkg-deb" >&2
     else
-        DEB_ROOT="build/deb-root"
+        DEB_ROOT="$STAGE_BASE/deb-root"
         rm -rf "$DEB_ROOT"
         mkdir -p "$DEB_ROOT/DEBIAN" \
                  "$DEB_ROOT/opt/${PKG_NAME}" \
@@ -247,7 +266,7 @@ if [[ "$DO_RPM" == "true" ]]; then
     if ! command -v rpmbuild >/dev/null; then
         echo "  跳过：系统没有 rpmbuild（apt install rpm / dnf install rpm-build）" >&2
     else
-        RPM_TOP="build/rpmbuild"
+        RPM_TOP="$STAGE_BASE/rpmbuild"
         rm -rf "$RPM_TOP"
         mkdir -p "$RPM_TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
@@ -365,11 +384,15 @@ exit 0
 /usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png
 SPEC
 
-        # --define "_topdir"：把 rpmbuild 的工作目录指到 build/ 下，
+        # --define "_topdir"：把 rpmbuild 的工作目录指到暂存目录，
         # 不污染 ~/rpmbuild —— 构建脚本不该往用户主目录写东西。
-        # --buildroot：显式指定，否则 rpmbuild 会自己清空 BUILDROOT。
+        #
+        # 注意 RPM_TOP 现在是**绝对路径**（在 $TMPDIR 下），不能再像
+        # 以前那样拼 $(pwd)/ 前缀 —— 那会拼成
+        #   /mnt/A/HMYLX//tmp/hmwlx-stage-xxx/rpmbuild
+        # rpmbuild 找不到 Source0，报 "Bad source"。
         if rpmbuild -bb \
-                --define "_topdir $(pwd)/${RPM_TOP}" \
+                --define "_topdir ${RPM_TOP}" \
                 --define "_build_id_links none" \
                 "$RPM_TOP/SPECS/${PKG_NAME}.spec" > "$RPM_TOP/build.log" 2>&1; then
             RPM_OUT=$(find "$RPM_TOP/RPMS" -name "*.rpm" | head -1)
