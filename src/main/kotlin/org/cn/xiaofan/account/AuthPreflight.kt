@@ -188,6 +188,21 @@ object AuthPreflight {
      * 刷新不会原地改旧对象）。失败时按异常分类，交给 UI 决定是否提示。
      */
     private suspend fun checkMicrosoft(account: Account): Result = withContext(Dispatchers.IO) {
+        refreshMicrosoft(account)
+    }
+
+    /**
+     * 刷新**指定**的微软账号，不读「当前账号」。
+     *
+     * <p>为什么需要这个：{@link #check} 只认当前选中的账号，而下载中心要判断的是
+     * 「启动器里有没有**任意一个**有效正版账号」—— 用户完全可能挂着正版号、
+     * 切到离线号去玩。那时候 check() 会返回当前离线号的 Ready，
+     * 判定就错了。
+     *
+     * <p>放在这里而不是在调用方重写一遍，是为了让异常分类（凭据失效 / 网络失败 /
+     * 限流）只有一处实现。两处各写一份的话，提示文案迟早不一致。
+     */
+    suspend fun refreshMicrosoft(account: Account): Result = withContext(Dispatchers.IO) {
         val authService = authServiceOrNull() ?: return@withContext Result.Unexpected(
             detail = "无法取得 AuthService",
             cause = null,
