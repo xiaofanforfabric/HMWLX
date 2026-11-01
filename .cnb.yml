@@ -134,144 +134,88 @@
         # 也避免单点故障（一个平台挂了另一个还能发）。
         # ------------------------------------------------------------------
         - name: release-build
-          # 跑两种提交：
-          #   1. 发版前缀的（dev:/rel:/RC:/beta:/test:）—— 推进版本号 + 开 PR，
-          #      同时打一遍产物做演练
-          #   2. 主分支的普通提交 —— 也就是 PR 合并后的那次 push。
-          #      这次构建才是真正的「发版」：版本号已由 PR 带进来，
-          #      release-tag stage 会给它打 tag，产物也要同步产出。
+          # 只在发版前缀的提交上跑：推进版本号 + 开 PR，顺带打一遍
+          # 产物做演练（test: 就是纯演练，不改版本号）。
           #
-          # 之前只匹配第 1 种，导致 PR 合并后只打了 tag 没有产物，
-          # tag 指向的 commit 在制品库里查不到东西。
-          #
-          # release-prepare.sh 对非发版提交会自己跳过（VERSION_CHANGED
-          # 不为 true 时直接 return），所以放宽条件是安全的。
+          # PR 合并后的构建不再走这里 —— 见下方 release-merged 流水线。
+          # 之前靠「主分支普通提交」兜，但那样 push 和
+          # pull_request.merged 会同时触发，同一次合并跑两遍构建。
           if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):' \
-            || printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}"
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
           script: |
             set -euo pipefail
             echo "发版/演练提交：$CNB_COMMIT_MESSAGE_TITLE"
 
-            # 版本推进 + 开 PR 的完整逻辑在 scripts/release-prepare.sh。
+            # 版本推进 + 开 PR：完整逻辑在 scripts/release-prepare.sh。
             #
-            # 为什么不内联在这里：CNB 的 script 以 sh 兼容方式执行，
-            # `[[ ]]` 会报 `sh: N: [[: not found`，而且 dash 对未知
-            # 命令返回 0，错误还会被吞掉，跑到后面才炸。改用独立
-            # 文件 + 显式 bash 调用，不依赖平台默认 shell。
+            # 不内联在这里的原因：CNB 的 script 以 sh 兼容方式执行，
+            # `[[ ]]` / `source` 都会报 not found，而且 dash 对未知
+            # 命令返回 0，错误被吞掉，跑到后面才炸。改用独立文件 +
+            # 显式 bash 调用，不依赖平台默认 shell。
             bash ./scripts/release-prepare.sh "$CNB_COMMIT_MESSAGE_TITLE"
 
-            # --- 依赖 ---
-            #
-            # zip / rpm / xz / file 和图形库全都装在镜像里了
-            # （docker/build-env.Dockerfile），这里不再 apt install：
-            #   - 每个 stage 是独立容器，但用的是同一个镜像，
-            #     镜像里有什么这里就有什么；
-            #   - 重复 apt update 每次要几秒到几十秒，而且 apt 源被墙时
-            #     还会让整个打包失败 —— 明明镜像里已经装好了。
-            #
-            # 这里只做存在性检查：缺东西就立刻报错，别拖到打包第 3 步
-            # 才发现没有 rpmbuild。
-            for cmd in zip unzip rpmbuild xz file jlink python3; do
-              command -v "$cmd" >/dev/null 2>&1 || {
-                echo "错误：镜像里缺少 $cmd，请检查 docker/build-env.Dockerfile" >&2
-                exit 1
-              }
-            done
+            # 构建产物（脚本里含工具检查、架构校验、打包、收集 fat jar）
+            bash ./scripts/cnb-build.sh
 
-            chmod +x ./gradlew scripts/*.sh scripts/*.py
+            # 演练也打 tag 会污染版本历史，所以发版前缀的 push 不打。
+            # tag 由 release-merged 在 PR 合并后打。
 
-            # 启动器编译器：Windows 用 mingw-w64，Linux 用 gcc，
-            # 两者都在镜像里（见 docker/build-env.Dockerfile）。
-            # 不再需要 zig，也就不再有「下载并解压 16000 个小文件」那一步。
-            for cc in x86_64-w64-mingw32-gcc gcc; do
-              command -v "$cc" >/dev/null 2>&1 || {
-                echo "错误：镜像里缺少 $cc，请检查 docker/build-env.Dockerfile" >&2
-                exit 1
-              }
-            done
-            echo "Windows 编译器: $(x86_64-w64-mingw32-gcc --version | head -1)"
-            echo "Linux 编译器:   $(gcc --version | head -1)"
 
-            # 架构校验：产物里写死了 amd64 / x86_64（DEB 的 Architecture
-            # 字段、AppImage 文件名）。万一 runner.tags 没生效、被调度到
-            # arm64 节点，宁可这里直接失败，也别产出架构标错的包 ——
-            # 那种包能下载能看，却装不上，排查成本高得多。
-            host_arch="$(uname -m)"
-            if [ "$host_arch" != "x86_64" ]; then
-              echo "错误：需要 x86_64 构建节点，当前是 $host_arch" >&2
-              echo "  产物架构写死为 amd64，跑在 $host_arch 上会打出错包。" >&2
-              echo "  检查 .cnb.yml 的 runner.tags 是否为 cnb:arch:amd64。" >&2
-              exit 1
-            fi
-            echo "构建节点架构: $host_arch ✓"
-
-            # 构建 fat jar（build.sh 会挑 JDK 25）
-            ./scripts/build.sh --fast
-
-            # 三步打包，顺序不能变：formats 依赖 pack-linux.sh 的目录产物
-            ./scripts/pack-windows.sh
-            ./scripts/pack-linux.sh
-            ./scripts/pack-linux-formats.sh
-
-            # fat jar 在 build/libs/，之前从没拷进 dist/，
-            # 所以发版产物里一直没有它。用户想「直接 java -jar 跑」
-            # 就得有这个。
-            #
-            # 不用 source scripts/version.sh 取 $FAT_JAR ——
-            # CNB 的 script 是 sh 兼容模式，没有 source 内建命令，
-            # 会报 `sh: N: source: not found`（exit 127）。
-            # 直接用 glob 找，版本号变了也不用改这里。
-            FAT_JAR=""
-            for f in build/libs/*-all.jar; do
-              [ -f "$f" ] && FAT_JAR="$f"
-            done
-            if [ -z "$FAT_JAR" ]; then
-              echo "错误：找不到 fat jar（build/libs/*-all.jar）" >&2
-              ls -la build/libs/ 2>/dev/null >&2 || true
-              exit 1
-            fi
-            mkdir -p dist
-            cp "$FAT_JAR" dist/
-            echo "已收集: dist/$(basename "$FAT_JAR")"
-
-            echo "=== 产物 ==="
-            ls -lh dist/
-
-        # ------------------------------------------------------------------
-        # 打 tag
-        #
-        # 原来设计上 tag 完全交给 GitHub 的 release-tag.yml，CNB 只构建。
-        # 但 GitHub 那边 verify 的输出写进 $GITHUB_ENV，同 step 读不到，
-        # 合并 PR 后一直没打出 tag。补上这一步，CNB 自己闭环发版。
-        #
-        # 幂等：远端已有同名 tag 就跳过，两个平台不会互相冲突。
-        # 只在主分支跑（脚本内部判断），release/xx 分支不碰。
-        # ------------------------------------------------------------------
-        - name: release-tag
-          # 只在「主分支的普通提交」上打 tag —— 也就是 PR 合并后的那次
-          # push。发版前缀（dev:/rel: 等）的那次 push 版本号还没推进，
-          # 打 tag 会拿到旧版本号；而且那种提交走的是开 PR 流程，
-          # tag 要等合并之后才该出现。
-          if: |
-            printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}" \
-            && ! printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+  # ==========================================================================
+  # PR 合并后：构建 + 打 tag + 发版
+  #
+  # 为什么要单独一条流水线，而不是混在 push 里：
+  #
+  #   push 事件在 PR 合并时也会触发，两者之间没有「谁是真正的合并」
+  #   的信息。混在一起只能靠提交信息猜，而合并提交的消息是
+  #   「合并来自 release/v0.1-dev1 的合并请求 #41」这种平台生成的文本，
+  #   猜不准。
+  #
+  #   pull_request.merged 是专门的合并事件，并且平台会注入
+  #   CNB_PULL_REQUEST_BRANCH（源分支名）。直接看源分支是否
+  #   release/ 开头，就知道这次合并是不是发版 —— 语义明确，不用猜。
+  #
+  # 其余合并（比如 feature 合进 master）不会碰这条流水线，
+  # push 那边跑常规 CI 就够了。
+  # ==========================================================================
+  pull_request.merged:
+    - name: release-merged
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        build: docker/build-env.Dockerfile
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+          BUILD_ROOT: /build
+        volumes:
+          - main:/root/.gradle:copy-on-write
+          - /build:data
+      # 只有源分支是 release/ 开头才发版。
+      # 非发版合并（feature -> master）直接跳过，不浪费构建资源。
+      if: |
+        printf '%s' "$CNB_PULL_REQUEST_BRANCH" | grep -qE '^release/'
+      stages:
+        - name: build
           script: |
             set -euo pipefail
+            echo "PR 合并发版：${CNB_PULL_REQUEST_BRANCH} -> ${CNB_BRANCH}"
+            grep '^appVersion' gradle.properties
+
+            # 构建全部产物（工具检查 + 架构校验 + 打包 + 收集 fat jar）
+            bash ./scripts/cnb-build.sh
+
+        - name: tag
+          script: |
+            set -euo pipefail
+            # 用合并后的 commit 打 tag（pull_request.merged 的
+            # CNB_COMMIT 就是合并后的 SHA）。
+            # 脚本内部幂等：远端已有同名 tag 就跳过。
             bash ./scripts/cnb-tag.sh
 
-        - name: release-upload
-          # 条件与 release-build 保持一致：主分支的普通提交（PR 合并后
-          # 那次）也要把产物交到制品库，否则 tag 指向的 commit 在制品
-          # 库里查不到东西。
-          if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):' \
-            || printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}"
+        - name: upload
           script: |
             set -euo pipefail
-            # 列出产物供 CNB 制品库收集。
-            # .cnb.yml 里不需要显式声明制品路径 —— CNB 会收集
-            # 构建结束时 dist/ 下的文件，在「制品」页可下载。
             echo "=== 发版产物 ==="
             for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz dist/*-all.jar; do
               [ -f "$f" ] && echo "$(du -h "$f" | cut -f1)  $f"
@@ -279,6 +223,7 @@
             echo ""
             VERSION=$(sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1 | xargs)
             echo "版本: $VERSION"
+
 
   pull_request:
     - name: pr-check
