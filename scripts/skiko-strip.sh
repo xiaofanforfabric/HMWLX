@@ -294,13 +294,59 @@ rm -f "$WORK_JAR"
 
 # ---------------------------------------------------------------- 校验
 fail=0
+JAR_ENTRIES="$(unzip -Z1 "$OUT_JAR" 2>/dev/null || true)"
 for f in "${NEW_FILES[@]}"; do
-  if ! unzip -l "$OUT_JAR" | grep -qF "$f"; then
+  if ! grep -qxF "$f" <<< "$JAR_ENTRIES"; then
     echo "错误：$OUT_JAR 内缺少 $f" >&2
     fail=1
   fi
 done
 
+# 另外真验一遍每个成员的 CRC —— 防「条目在但数据被截断」。
+if ! unzip -t "$OUT_JAR" >/dev/null 2>&1; then
+  echo "错误：$OUT_JAR 完整性校验失败（unzip -t 不通过）" >&2
+  fail=1
+fi
+# 校验失败时把现场信息全打出来 —— 否则只能靠猜。
+# 之前这里只报「缺少 xxx」，看不出到底是 zip 没写进去、
+# cp 没拷到位置，还是 OUT_JAR 根本不是我们写的那份。
+if [[ "$fail" -ne 0 ]]; then
+  {
+    echo ""
+    echo "==== 诊断 ===="
+    echo "JAR(输入)  : $JAR"
+    echo "OUT_JAR    : $OUT_JAR"
+    echo "ABS_OUT    : $ABS_OUT"
+    echo "WORK_JAR   : ${WORK_JAR:-（已删除）}"
+    echo "PLATFORM   : $PLATFORM"
+    echo "TMP        : $TMP"
+    echo ""
+    echo "-- 各路径 inode / 大小 --"
+    for p in "$JAR" "$OUT_JAR" "$ABS_OUT" "$WORK_JAR"; do
+      if [[ -e "$p" ]]; then
+        stat -c '  %n  size=%s inode=%i mtime=%y' "$p" 2>/dev/null
+      else
+        echo "  $p  【不存在】"
+      fi
+    done
+    echo ""
+    echo "-- NEW_FILES 源文件是否还在 TMP 里 --"
+    for f in "${NEW_FILES[@]}"; do
+      if [[ -f "$TMP/$f" ]]; then
+        stat -c '  存在: %n size=%s' "$TMP/$f" 2>/dev/null
+      else
+        echo "  【缺失】$TMP/$f"
+      fi
+    done
+    echo ""
+    echo "-- OUT_JAR 里实际有哪些原生库 --"
+    unzip -l "$OUT_JAR" 2>&1 | grep -iE 'dll|\.so|dylib|icudtl' || echo "  （一个都没有）"
+    echo ""
+    echo "-- 磁盘 --"
+    df -h "$(dirname "$ABS_OUT")" 2>/dev/null | sed 's/^/  /'
+    echo "==== 诊断结束 ===="
+  } >&2
+fi
 # 不应该残留别的平台
 if unzip -l "$OUT_JAR" | awk '{print $NF}' \
    | grep -E '^(libskiko-[^/]*\.(so|dylib)|skiko-[^/]*\.dll)$' \
