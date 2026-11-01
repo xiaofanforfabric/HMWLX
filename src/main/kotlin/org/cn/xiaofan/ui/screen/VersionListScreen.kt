@@ -19,9 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,20 +59,16 @@ import org.jetbrains.skia.Image as SkiaImage
 /**
  * 主界面：版本列表 + 版本详情。
  *
- * <p>布局照抄主流启动器的骨架 —— 左边一列版本，右边是选中版本的详情和启动按钮。
- * 分成左右两块而不是一个大列表，是因为「选版本」和「启动」是两件事：
- * 列表只用来挑，启动的上下文（游戏目录、加载器、是否可以启动）全在右边。
+ * <p>布局照抄主流启动器的骨架 —— 左边一列版本，右边是选中版本的详情。
+ * 分成左右两块而不是一个大列表，是因为「选版本」和「查看详情」是两件事：
+ * 列表只用来挑，详情上下文（游戏目录、加载器、是否可以启动）全在右边。
  *
  * <p>列表数据来自 [GameVersionService]，是**读磁盘**的操作，因此在协程里加载，
  * 加载期间显示进度条，失败时显示原因并提供重试 —— 不静默吞掉。
- *
- * @param onLaunch 启动回调。当前由调用方留空并提示「还没接」，
- *   等启动链路（拼参数 → 起 JVM → 接日志）做完再填。
  */
 @Composable
 fun VersionListScreen(
     state: VersionState,
-    onLaunch: (GameVersion) -> Unit = {},
 ) {
     val versions = state.versions
     val selected = state.selected
@@ -140,11 +134,6 @@ fun VersionListScreen(
                     VersionDetail(
                         version = current,
                         gameDirPath = state.gameDirPath,
-                        onLaunch = {
-                            // 启动链路还没接：先把选中版本交出去，调用方决定怎么提示。
-                            // 这里不自己弹「敬请期待」——那是界面该说的话，不是列表该说的话。
-                            onLaunch(current)
-                        },
                         onRescan = { state.reload() },
                         onOpenGameDir = {
                             // 打不开目录（目录被删 / 没有文件管理器）只是不响应，不弹错误框：
@@ -305,7 +294,6 @@ private object VersionListScreenLogo
 private fun VersionDetail(
     version: GameVersion,
     gameDirPath: String?,
-    onLaunch: () -> Unit,
     onRescan: () -> Unit,
     onOpenGameDir: () -> Unit,
 ) {
@@ -359,15 +347,6 @@ private fun VersionDetail(
         Spacer(Modifier.weight(1f))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onLaunch, enabled = version.launchable) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(text(TextKey.VERSION_LAUNCH))
-            }
             OutlinedButton(onClick = onOpenGameDir) {
                 Text(text(TextKey.VERSION_OPEN_DIR))
             }
