@@ -134,8 +134,21 @@
         # 也避免单点故障（一个平台挂了另一个还能发）。
         # ------------------------------------------------------------------
         - name: release-build
+          # 跑两种提交：
+          #   1. 发版前缀的（dev:/rel:/RC:/beta:/test:）—— 推进版本号 + 开 PR，
+          #      同时打一遍产物做演练
+          #   2. 主分支的普通提交 —— 也就是 PR 合并后的那次 push。
+          #      这次构建才是真正的「发版」：版本号已由 PR 带进来，
+          #      release-tag stage 会给它打 tag，产物也要同步产出。
+          #
+          # 之前只匹配第 1 种，导致 PR 合并后只打了 tag 没有产物，
+          # tag 指向的 commit 在制品库里查不到东西。
+          #
+          # release-prepare.sh 对非发版提交会自己跳过（VERSION_CHANGED
+          # 不为 true 时直接 return），所以放宽条件是安全的。
           if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):' \
+            || printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}"
           script: |
             set -euo pipefail
             echo "发版/演练提交：$CNB_COMMIT_MESSAGE_TITLE"
@@ -201,6 +214,20 @@
             ./scripts/pack-linux.sh
             ./scripts/pack-linux-formats.sh
 
+            # fat jar 在 build/libs/，之前从没拷进 dist/，
+            # 所以发版产物里一直没有它。用户想「直接 java -jar 跑」
+            # 就得有这个。
+            # version.sh 里定义了 FAT_JAR，并处理了版本号不一致时的回退。
+            # shellcheck source=./version.sh
+            source ./scripts/version.sh
+            if [ ! -f "$FAT_JAR" ]; then
+              echo "错误：找不到 fat jar $FAT_JAR" >&2
+              exit 1
+            fi
+            mkdir -p dist
+            cp "$FAT_JAR" dist/
+            echo "已收集: dist/$(basename "$FAT_JAR")"
+
             echo "=== 产物 ==="
             ls -lh dist/
 
@@ -227,15 +254,19 @@
             bash ./scripts/cnb-tag.sh
 
         - name: release-upload
+          # 条件与 release-build 保持一致：主分支的普通提交（PR 合并后
+          # 那次）也要把产物交到制品库，否则 tag 指向的 commit 在制品
+          # 库里查不到东西。
           if: |
-            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+            printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):' \
+            || printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}"
           script: |
             set -euo pipefail
             # 列出产物供 CNB 制品库收集。
             # .cnb.yml 里不需要显式声明制品路径 —— CNB 会收集
             # 构建结束时 dist/ 下的文件，在「制品」页可下载。
             echo "=== 发版产物 ==="
-            for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz; do
+            for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz dist/*-all.jar; do
               [ -f "$f" ] && echo "$(du -h "$f" | cut -f1)  $f"
             done
             echo ""

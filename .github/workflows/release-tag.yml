@@ -258,6 +258,21 @@ jobs:
           chmod +x scripts/*.sh
           ./scripts/pack-linux-formats.sh
 
+      # fat jar 在 build/libs/，之前从没拷进 dist/，所以发版产物里
+      # 一直没有它。用户想要「直接 java -jar 跑」就得有这个。
+      - name: 收集 fat jar
+        run: |
+          set -euo pipefail
+          # version.sh 里定义 FAT_JAR，并处理了版本号不一致时的回退
+          source ./scripts/version.sh
+          if [[ ! -f "$FAT_JAR" ]]; then
+            echo "错误：找不到 fat jar $FAT_JAR" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$FAT_JAR" dist/
+          echo "已收集: dist/$(basename "$FAT_JAR")  ($(du -h "$FAT_JAR" | cut -f1))"
+
       - name: 列出产物
         run: |
           echo "=== dist ==="
@@ -274,6 +289,7 @@ jobs:
             dist/*.rpm
             dist/*.AppImage
             dist/*.tar.gz
+            dist/*-all.jar
           if-no-files-found: error
           retention-days: 7
 
