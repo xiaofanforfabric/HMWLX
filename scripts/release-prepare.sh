@@ -70,12 +70,54 @@ BASE_BRANCH="${CNB_DEFAULT_BRANCH:-master}"
 echo "推进版本号：${VERSION_PREV} -> ${APP_VERSION}"
 echo "分支：$BRANCH，目标：$BASE_BRANCH"
 
+# ---------------------------------------------------------------- 推送目标
+#
+# 不能直接 `git push origin`：CNB 的代码是平台用独立 service 拉下来的，
+# 容器里的 .git/config 不一定留了可用的凭据（而且构建镜像原本连 git
+# 都没装）。
+#
+# 用 CNB_TOKEN 现造一个带认证的 URL：
+#   https://cnb:<CNB_TOKEN>@<host>/<repo>.git
+# 用户名固定为 cnb（文档的 CNB_TOKEN_USER_NAME 就是这个值）。
+#
+# 优先用 CNB_REPO_URL_HTTPS（平台注入，已经是完整地址），
+# 没有就按 CNB_WEB_HOST + CNB_REPO_SLUG 拼。
+if [[ -n "${CNB_TOKEN:-}" ]]; then
+    if [[ -n "${CNB_REPO_URL_HTTPS:-}" ]]; then
+        _url="$CNB_REPO_URL_HTTPS"
+    else
+        _url="https://${CNB_WEB_HOST}/${CNB_REPO_SLUG}.git"
+    fi
+    _user="${CNB_TOKEN_USER_NAME:-cnb}"
+    # 令牌写进临时凭据文件，而不是塞进 URL ——
+    # git 报错时会把含令牌的 URL 原样打出来，日志里就泄漏了。
+    # 用 credential.helper=store + 临时文件，命令行里只有干净地址。
+    CRED_FILE="$(mktemp)"
+    chmod 600 "$CRED_FILE"
+    _clean="${_url#https://}"
+    _clean="${_clean#http://}"
+    printf 'https://%s:%s@%s\n' "$_user" "$CNB_TOKEN" "${_clean#*@}" > "$CRED_FILE"
+    export GIT_TERMINAL_PROMPT=0
+    REMOTE="${_url}"
+    GIT_CRED_OPTS=(-c "credential.helper=store --file=$CRED_FILE")
+    unset _url _clean _user
+else
+    # 本地直接跑脚本时没有 CNB_TOKEN，回落到 origin
+    echo "（没有 CNB_TOKEN，用 origin）"
+    REMOTE="origin"
+    CRED_FILE=""
+    GIT_CRED_OPTS=()
+fi
+
+_cleanup_cred() { [[ -n "$CRED_FILE" ]] && rm -f "$CRED_FILE"; }
+trap _cleanup_cred EXIT
+
 git config user.name  "cnb"
 git config user.email "cnb@cnb.cool"
 
 # 幂等：上次可能已经把分支推上去了（比如开 PR 那步挂了），
 # 重跑时直接覆盖，不要因为 non-fast-forward 让整个流水线失败。
-REMOTE_SHA="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
+REMOTE_SHA="$(git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} ls-remote --heads "$REMOTE" "$BRANCH" | awk '{print $1}')"
 
 git checkout -b "$BRANCH"
 git add gradle.properties
@@ -95,9 +137,10 @@ if [[ -n "$REMOTE_SHA" ]]; then
         exit 1
     fi
     echo "远端已有 $BRANCH（$REMOTE_SHA），内容一致，覆盖"
-    git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "$BRANCH"
+    git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" \
+        "$REMOTE" "$BRANCH"
 else
-    git push origin "$BRANCH"
+    git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push "$REMOTE" "$BRANCH"
 fi
 
 # ---------------------------------------------------------------- PR 正文

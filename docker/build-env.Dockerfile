@@ -46,6 +46,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 #
 # mingw-w64             交叉编译 Windows 启动器（x86_64-w64-mingw32-gcc）
 # build-essential/gcc   编译 Linux 启动器
+# git                   发版流程要提交版本号、推 release 分支
+#                       （scripts/release-prepare.sh）。代码本身是 CNB
+#                       用独立 service 拉的，容器里本来没有 git。
 # zip unzip             打压缩包
 # rpm                   rpmbuild 打 RPM 包（Ubuntu 里包名就叫 rpm）
 # xz-utils              解 xz / 造 AppImage
@@ -59,6 +62,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl \
+        git \
         python3 \
         build-essential gcc binutils \
         mingw-w64 \
@@ -138,6 +142,7 @@ RUN set -eux; \
         x86_64-w64-mingw32-gcc \
         python3 \
         bash \
+        git \
         zip unzip rpm rpmbuild \
         xz tar gzip file fakeroot \
         appimagetool mksquashfs \
