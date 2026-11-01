@@ -376,8 +376,19 @@
               *dev*|*beta*|*rc*|*RC*|*alpha*) PRE="--prerelease" ;;
             esac
 
-            bash ./scripts/cnb-release.py \
-              --repo "${CNB_REPO_SLUG}" \
+            # 仓库标识。CNB 内置变量在不同事件下可能是
+            # 「组织/仓库」或「组织/仓库/仓库」，先打出来，不对再从
+            # git remote 里解析，避免把附件传到不存在的仓库上。
+            REPO="${CNB_REPO_SLUG:-}"
+            echo "CNB_REPO_SLUG=${REPO}"
+            if [ -z "$REPO" ]; then
+              REPO=$(git config --get remote.origin.url \
+                | sed -e 's|^.*://[^/]*/||' -e 's|\.git$||')
+              echo "回退解析: REPO=${REPO}"
+            fi
+
+            python3 ./scripts/cnb-release.py \
+              --repo "${REPO}" \
               --tag "${CNB_BRANCH}" \
               --name "HMWLX ${VERSION}" \
               $PRE \
