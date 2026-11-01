@@ -87,6 +87,11 @@ chmod 644 "$RPM_STAGE/usr/share/applications/${PKG_NAME}.desktop"
 
 cp "$ICON" "$RPM_STAGE/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png"
 
+# spec 里 Source0 指向的占位文件。内容无用，只是为了满足
+# rpm 4.20+ 的 %mkbuilddir（详见 spec 里 Source0 的注释）。
+# 放在 SOURCES 下，rpmbuild 才找得到。
+: > "$RPM_TOP/SOURCES/${PKG_NAME}-dummy.txt"
+
 # ------------------------------------------------------------ spec
 #
 # BuildArch: x86_64 —— 内置的 JRE 是平台相关的，不能标 noarch。
@@ -105,32 +110,32 @@ License:        Proprietary
 URL:            ${HOMEPAGE}
 BuildArch:      x86_64
 AutoReqProv:    no
-
-# AutoReqProv: no 关掉了自动依赖探测（它会把包内 JRE 的 .so 当依赖，
-# 产生一堆不存在的包名）。所以系统库必须手写。
-#
-# 这些是 libskiko-linux-x64.so 的 ldd 结果里、包内没提供的：
 Requires:       libX11
 Requires:       fontconfig
 Requires:       freetype
 Requires:       mesa-libGL
+
+# 这个 Source0 是个空文件，内容完全不用。
+#
+# 为什么要有：rpm 4.20+ 在 %prep 之前会自动插一段 %mkbuilddir
+# 建 BUILD 目录，而那段模板要求存在 Source0。我们的 spec 本来
+# 不需要任何 source（文件树直接由 %install 从暂存目录拷），于是
+# 新版本 rpm 会报：
+#   error: No source number 0
+#   Executing(%mkbuilddir): ...
+#   error: Bad exit status from /var/tmp/rpm-tmp.xxx (%prep)
+#
+# 给个 dummy 就行 —— %prep 仍然是空的，没有 %setup，
+# 所以不会解包它，也就不会调外部 tar（那才是我们要避开的坑）。
+Source0:        ${PKG_NAME}-dummy.txt
 
 %description
 一个基于 headlessmc 的 Minecraft 启动器，内置 Java 运行时。
 用户无需单独安装 Java，安装后可从应用菜单启动。
 
 %prep
-# 什么都不做：不走 Source0 + %setup（它会调外部 tar，见脚本头注释）。
-
 %build
-# 预构建产物，无需编译
-
 %install
-# 把暂存目录的整棵文件树拷进 buildroot。
-# -a 保留符号链接（/usr/bin/hmwlx 是软链）和权限。
-#
-# ${RPM_STAGE} 由外层 shell 在写 spec 时就展开成绝对路径
-# （heredoc 无引号），不用 rpmbuild 的 --define 传。
 cp -a "${RPM_STAGE}"/. %{buildroot}/
 
 %post
