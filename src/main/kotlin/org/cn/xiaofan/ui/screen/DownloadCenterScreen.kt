@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -104,17 +103,16 @@ private fun CheckingView() {
  * 却看到「请先登录正版账号」—— 他会以为账号被删了，跑去重新登录，
  * 登录也失败，于是彻底懵。网络问题必须说成网络问题。
  *
- * <p>为什么仍然不给按钮：
- * 「没登录」时该做的是去账号栏登录，给「重试」按钮没用；
- * 「网络问题」时用户的正确动作是检查网络或等微软恢复，
- * 给「重试」也只是让他反复点同一件事。真正需要刷新时，
- * 重新进出本页面就会重新校验。
+ * <p>为什么一个按钮都不给：
+ * 「没登录」时该做的是去账号栏登录，重试没用；
+ * 「网络问题」时该做的是检查网络或等微软恢复，重试只是反复点同一件事。
+ * 真正需要重新校验时，切走再回到本页就会触发（见前面 LaunchedEffect）。
+ * 给一个多半无效的按钮，比不给更让人困惑 —— 用户会以为卡住了。
  */
 @Composable
 private fun DeniedView(state: DownloadState) {
     val denied = state.access as? DownloadAccess.Denied
-    val reason = denied?.reason
-    val messageKey = when (reason) {
+    val messageKey = when (denied?.reason) {
         DownloadAccess.DenyReason.NETWORK_UNAVAILABLE -> TextKey.DOWNLOAD_NETWORK_UNAVAILABLE
         DownloadAccess.DenyReason.RATE_LIMITED -> TextKey.DOWNLOAD_RATE_LIMITED
         // 其余情况（没账号 / 凭据失效 / 未预期）统一用同一句：
@@ -122,32 +120,17 @@ private fun DeniedView(state: DownloadState) {
         else -> TextKey.DOWNLOAD_REQUIRE_MS_ACCOUNT
     }
 
-    // 只有「等一下可能就好了」的原因才值得给重试按钮。
-    // 没账号 / 凭据失效时重试只会得到同样结果，给按钮反而像坏了。
-    val retryable = reason == DownloadAccess.DenyReason.NETWORK_UNAVAILABLE ||
-        reason == DownloadAccess.DenyReason.RATE_LIMITED
-
     Box(
         modifier = Modifier.fillMaxSize().padding(48.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            Text(
-                text = text(messageKey),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.widthIn(max = 560.dp),
-            )
-            if (retryable) {
-                OutlinedButton(onClick = { state.recheck() }) {
-                    Text(text(TextKey.DOWNLOAD_RECHECK))
-                }
-            }
-        }
+        Text(
+            text = text(messageKey),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 560.dp),
+        )
     }
 }
 

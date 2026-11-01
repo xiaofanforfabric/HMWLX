@@ -206,12 +206,6 @@ object TextKey {
     /** 正在校验账号时的提示。 */
     const val DOWNLOAD_CHECKING = "download.checking"
 
-    /** 校验失败（网络等原因）时的提示。`{0}` 为原因。 */
-    const val DOWNLOAD_CHECK_FAILED = "download.check.failed"
-
-    /** 重新校验按钮。 */
-    const val DOWNLOAD_RECHECK = "download.recheck"
-
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"
 
