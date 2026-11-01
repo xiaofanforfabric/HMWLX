@@ -177,6 +177,41 @@ object TextKey {
     /** 右侧面板页签：版本。 */
     const val PANEL_VERSIONS = "panel.versions"
 
+    /** 右侧面板页签：下载中心。 */
+    const val PANEL_DOWNLOAD = "panel.download"
+
+    // --- 下载中心 ---
+    //
+    // 没有有效微软正版账号时，下载页整页只显示拒绝文案。
+    // 这不是「提示后仍可继续」，是硬门槛：Minecraft 本体受 Mojang EULA
+    // 保护，只有购买了正版的微软账号才有权下载。
+
+    /** 下载页标题。 */
+    const val DOWNLOAD_TITLE = "download.title"
+
+    /** 未登录有效微软账号时的唯一文案（整页只显示这一句）。 */
+    const val DOWNLOAD_REQUIRE_MS_ACCOUNT = "download.require.ms.account"
+
+    /**
+     * 连不上微软验证服务器时的文案。
+     *
+     * <p>必须和 [DOWNLOAD_REQUIRE_MS_ACCOUNT] 分开：用户明明有正版号，
+     * 只是微软挂了或自己断网，却看到「请先登录正版账号」—— 会以为账号被删了。
+     */
+    const val DOWNLOAD_NETWORK_UNAVAILABLE = "download.network.unavailable"
+
+    /** 被微软限流、无法完成校验时的文案。 */
+    const val DOWNLOAD_RATE_LIMITED = "download.rate.limited"
+
+    /** 正在校验账号时的提示。 */
+    const val DOWNLOAD_CHECKING = "download.checking"
+
+    /** 校验失败（网络等原因）时的提示。`{0}` 为原因。 */
+    const val DOWNLOAD_CHECK_FAILED = "download.check.failed"
+
+    /** 重新校验按钮。 */
+    const val DOWNLOAD_RECHECK = "download.recheck"
+
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"
 

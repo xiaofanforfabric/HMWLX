@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +51,7 @@ import org.cn.xiaofan.account.blocksLaunch
 import org.cn.xiaofan.account.shouldWarn
 import org.cn.xiaofan.account.sourceLabel
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.download.rememberDownloadState
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 import org.cn.xiaofan.launch.BackgroundSessionPolicy
@@ -66,6 +68,7 @@ import org.cn.xiaofan.ui.component.LaunchTransition
 import org.cn.xiaofan.ui.component.VersionDrawer
 import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
+import org.cn.xiaofan.ui.screen.DownloadCenterScreen
 import org.cn.xiaofan.ui.screen.LaunchingScreen
 import org.cn.xiaofan.ui.screen.VersionListScreen
 import org.cn.xiaofan.version.rememberVersionState
@@ -117,6 +120,10 @@ fun HmwLxApp() {
     // 版本状态提到这一层：首页的启动按钮要显示当前版本，
     // 版本页要展示全部。两处共用一份，才能保证在一处改了选择另一处立刻知道。
     val versions = rememberVersionState()
+
+    // 下载中心的准入状态。同样提到这一层：用户可能来回切页面，
+    // 放在页面内部的话每次进来都会重新校验一遍（要发两次 HTTP 请求）。
+    val download = rememberDownloadState(launchScope)
 
     // 版本抽屉是否展开。
     var showVersionDrawer by remember { mutableStateOf(false) }
@@ -452,6 +459,10 @@ fun HmwLxApp() {
                                     MainPanel.VERSIONS -> VersionListScreen(
                                         state = versions,
                                     )
+
+                                    MainPanel.DOWNLOAD -> DownloadCenterScreen(
+                                        state = download,
+                                    )
                                 }
                             }
                         }
@@ -691,6 +702,9 @@ private enum class MainPanel {
 
     /** 游戏版本列表。 */
     VERSIONS,
+
+    /** 下载中心。需要有效微软正版账号，否则整页只有拒绝文案。 */
+    DOWNLOAD,
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +784,18 @@ private fun SideMenu(
                                 onSelectPanel(
                                     if (panel == MainPanel.VERSIONS) MainPanel.HOME
                                     else MainPanel.VERSIONS
+                                )
+                            },
+                        )
+
+                        MenuEntry(
+                            label = text(TextKey.PANEL_DOWNLOAD),
+                            icon = Icons.Filled.Download,
+                            selected = panel == MainPanel.DOWNLOAD,
+                            onClick = {
+                                onSelectPanel(
+                                    if (panel == MainPanel.DOWNLOAD) MainPanel.HOME
+                                    else MainPanel.DOWNLOAD
                                 )
                             },
                         )
