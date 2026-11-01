@@ -2,7 +2,6 @@ package org.cn.xiaofan.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -333,9 +332,15 @@ fun HmwLxApp() {
                                         // 后台按钮放在启动按钮的**右侧**，
                                         // 仍在主区域内（不是侧栏里）——
                                         // 它管的是"当前在跑的游戏"，属于内容区的事。
+                                        //
+                                        // Row 必须 fillMaxWidth：靠它撑满主区域宽度，
+                                        // 中间的 Spacer(weight(1f)) 才能把齿轮顶到最右边。
+                                        // 以前这里是 spacedBy(440.dp) 硬编码间距，
+                                        // 窗口一变齿轮就跑到区域外或者离右边差一大截 ——
+                                        // 440 只是当时凑出来的数，不是布局约束。
                                         Row(
+                                            modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.Bottom,
-                                            horizontalArrangement = Arrangement.spacedBy(440.dp),
                                         ) {
                                             LaunchButtonWithVersion(
                                                 state = launchAnim,
@@ -380,6 +385,11 @@ fun HmwLxApp() {
                                                 },
                                                 onOpenVersions = { showVersionDrawer = true },
                                             )
+
+                                            // 弹性间隔：吃掉中间所有剩余宽度，
+                                            // 把齿轮推到主区域右边。
+                                            // 窗口拉宽拉窄，齿轮始终贴着右边界。
+                                            Spacer(Modifier.weight(1f))
 
                                             // 圆形齿轮：后台游戏入口。
                                             //
@@ -441,12 +451,6 @@ fun HmwLxApp() {
 
                                     MainPanel.VERSIONS -> VersionListScreen(
                                         state = versions,
-                                        onLaunch = { version ->
-                                            println(
-                                                "[HMWLX] 请求启动版本 ${version.id} " +
-                                                    "(类型=${version.type}, 父版本=${version.inheritsFrom})"
-                                            )
-                                        },
                                     )
                                 }
                             }
