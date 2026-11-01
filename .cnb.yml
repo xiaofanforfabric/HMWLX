@@ -160,6 +160,56 @@
             # 演练也打 tag 会污染版本历史，所以发版前缀的 push 不打。
             # tag 由 release-merged 在 PR 合并后打。
 
+    # ------------------------------------------------------------------
+    # 模拟 PR 合并：cprm: 提交手动触发
+    #
+    # 用途：验证「打 tag -> 触发 tag_push -> 构建发版」这条链路。
+    #
+    # 为什么需要：真正的 pull_request.merged 只有在平台上真的点合并
+    # PR 才会触发。想验证一次就得完整走「回滚 -> 删 GitHub Release
+    # -> 删 tag -> 重推 dev」，成本太高，而且容易把已经发好的版本弄乱。
+    #
+    # 用法：git commit --allow-empty -m "cprm:" && git push
+    #
+    # 它跟 pull_request.merged 干一样的事：只打 tag，不构建。然后
+    # 观察 tag_push 会不会自己接上。
+    #
+    # 注意：打出来的 tag 是真的。验证完想重来，得先删 tag。
+    # ------------------------------------------------------------------
+    - name: simulate-merged
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        build: docker/build-env.Dockerfile
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        volumes:
+          - main:/root/.gradle:copy-on-write
+      # 只在主分支 + cprm: 前缀时跑。
+      # 注意不能写成顶层 cprm: 分支键 —— CNB 的顶层键匹配的是分支名，
+      # 不是提交前缀。（踩过：写成顶层键后推 master 完全不触发。）
+      if: |
+        printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}" \
+        && printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^cprm:'
+      stages:
+        - name: tag
+          script: |
+            set -euo pipefail
+            echo "【模拟 PR 合并】提交：$CNB_COMMIT_MESSAGE_TITLE"
+            grep '^appVersion' gradle.properties
+
+            # 和 pull_request.merged 的打 tag 逻辑完全一致。
+            # 这里绝不能顺手把构建也做了 —— 那样验证的就不是链路了。
+            bash ./scripts/cnb-tag.sh
+
+            echo ""
+            echo "tag 已推送。接下来观察："
+            echo "  CNB 是否自动启动了一条 tag_push 流水线？"
+            echo "  启动了 -> 链路通"
+            echo "  没启动 -> CNB_TOKEN 推 tag 不触发新流水线，"
+            echo "            需要改成在同一流水线里串行构建"
+
 
   # ==========================================================================
   # PR 合并后：构建 + 打 tag + 发版
@@ -258,42 +308,6 @@
             chmod +x ./gradlew
             # --no-build-cache 的理由同 push 分支，见上方注释。
             ./gradlew test --no-daemon --no-build-cache --stacktrace
-
-cprm:
-  push:
-    - name: simulate-merged
-      runner:
-        tags: cnb:arch:amd64
-      docker:
-        build: docker/build-env.Dockerfile
-        env:
-          LANG: C.UTF-8
-          LC_ALL: C.UTF-8
-        volumes:
-          - main:/root/.gradle:copy-on-write
-      # 只在主分支上跑 —— cprm: 提交推送到别的分支没有意义
-      if: |
-        printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}" \
-        && printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^cprm:'
-      stages:
-        - name: tag
-          script: |
-            set -euo pipefail
-            echo "【模拟 PR 合并】提交：$CNB_COMMIT_MESSAGE_TITLE"
-            grep '^appVersion' gradle.properties
-
-            # 和 pull_request.merged 的打 tag 逻辑完全一致。
-            # 这个测试的意义就在于验证「打完 tag 之后 tag_push
-            # 会不会自己接上」，所以这里绝不能顺手把构建也做了 ——
-            # 那样验证的就不是链路了。
-            bash ./scripts/cnb-tag.sh
-
-            echo ""
-            echo "tag 已推送。接下来要观察的是："
-            echo "  CNB 是否自动启动了一条 tag_push 流水线？"
-            echo "  如果启动了，说明链路通；如果没启动，说明"
-            echo "  用 CNB_TOKEN 推 tag 不触发新流水线（递归保护），"
-            echo "  需要改成在同一个流水线里串行构建。"
 
 
 # ==========================================================================
