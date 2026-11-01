@@ -137,6 +137,7 @@ RUN set -eux; \
         gcc strip objdump \
         x86_64-w64-mingw32-gcc \
         python3 \
+        bash \
         zip unzip rpm rpmbuild \
         xz tar gzip file fakeroot \
         appimagetool mksquashfs \

@@ -140,111 +140,13 @@
             set -euo pipefail
             echo "发版/演练提交：$CNB_COMMIT_MESSAGE_TITLE"
 
-            # release.sh 通过 $CI_ENV_FILE 把变量交给后续步骤。
-            # 这个变量必须指向一个文件并且真的 source 进来 ——
-            # 不 source 的话 VERSION_CHANGED / APP_VERSION 全是空的，
-            # 后面「开 PR」那步会被静默跳过。
-            export CI_ENV_FILE="$(mktemp)"
-            # shellcheck disable=SC2064  # 有意立即展开路径
-            trap "rm -f '$CI_ENV_FILE'" EXIT
-
-            # 版本号与阶段解析（与 GitHub 用同一套脚本，保证行为一致）。
+            # 版本推进 + 开 PR 的完整逻辑在 scripts/release-prepare.sh。
             #
-            # test: 前缀时 release.sh 只输出提示、不改 gradle.properties，
-            # 后面照常打包 —— 这就是「演练」：产物能出，但版本号不动、
-            # 不发版。用空提交即可触发：
-            #   git commit --allow-empty -m "test: 验证打包"
-            ./scripts/release.sh --prepare "$CNB_COMMIT_MESSAGE_TITLE"
-
-            # 把 release.sh 写进 CI_ENV_FILE 的变量读进来
-            if [[ -s "$CI_ENV_FILE" ]]; then
-              while IFS='=' read -r k v; do
-                [[ -n "$k" ]] && printf '  %s=%s\n' "$k" "$v"
-              done < "$CI_ENV_FILE"
-              set -a
-              # shellcheck disable=SC1090  # 路径是运行时变量
-              source "$CI_ENV_FILE"
-              set +a
-            else
-              echo "错误：release.sh 没有输出任何变量" >&2
-              exit 1
-            fi
-
-            # --- 开 PR 推进版本号 ---
-            #
-            # 和 GitHub 的 release-prepare 做同一件事：把新版本号
-            # 提交到 release/v<版本> 分支，开 PR 等合并。
-            #
-            # 为什么 CNB 也能做：OpenAPI 有 POST /{repo}/-/pulls
-            # （operationId: PostPull），而 push 事件下的
-            # CNB_TOKEN 已经带 repo-pr:rw + repo-code:rw 权限，
-            # 不需要 NPC，也不需要任何仓库开关。见 scripts/cnb-pr.py
-            # 顶部的说明。
-            #
-            # test: 前缀时 VERSION_CHANGED=false，什么都不做 ——
-            # 演练不推进版本号。
-            if [[ "${VERSION_CHANGED:-false}" == "true" ]]; then
-              BRANCH="release/v${APP_VERSION}"
-              echo "推进版本号：$VERSION_PREV -> $APP_VERSION，分支 $BRANCH"
-
-              git config user.name  "cnb"
-              git config user.email "cnb@cnb.cool"
-
-              # 幂等：上次可能已经把分支推上去了（比如开 PR 那步
-              # 挂了），重跑时直接复用，不要因为 non-fast-forward
-              # 整个流水线失败。
-              REMOTE_SHA="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
-
-              git checkout -b "$BRANCH"
-              git add gradle.properties
-              # commit 消息用单行 + 多个 -m，避免多行字符串把
-              # YAML 的 script: | 块缩进打断（缩进为 0 的行会让
-              # YAML 解析器认为块结束了）。
-              git commit \
-                -m "chore(release): 版本号 ${VERSION_PREV} -> ${APP_VERSION}" \
-                -m "由 CNB 流水线自动生成。阶段：${RELEASE_STAGE}，tag：${RELEASE_TAG}，预发布：${IS_PRERELEASE}"
-
-              if [[ -n "$REMOTE_SHA" ]]; then
-                REMOTE_VER="$(git show "${REMOTE_SHA}:gradle.properties" 2>/dev/null \
-                              | sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' | tr -d '\r')"
-                if [[ "$REMOTE_VER" != "$APP_VERSION" ]]; then
-                  echo "错误：远端 $BRANCH 的 appVersion 是 '$REMOTE_VER'，不是 '$APP_VERSION'" >&2
-                  exit 1
-                fi
-                git push --force-with-lease="refs/heads/$BRANCH:$REMOTE_SHA" origin "$BRANCH"
-              else
-                git push origin "$BRANCH"
-              fi
-
-              # PR 正文。用 printf 逐行拼，不用 heredoc ——
-              # heredoc 的内容从行首开始，会把 YAML 的
-              # script: | 块缩进打断（缩进为 0 的行意味着块结束）。
-              PRBODY=/tmp/cnb-pr-body.md
-              {
-                printf '## 发版：%s\n\n' "$APP_VERSION"
-                printf '| 项 | 值 |\n|---|---|\n'
-                printf '| 版本 | `%s` → `%s` |\n' "$VERSION_PREV" "$APP_VERSION"
-                printf '| 阶段 | `%s` |\n' "$RELEASE_STAGE"
-                printf '| Tag | `%s` |\n' "$RELEASE_TAG"
-                printf '| 预发布 | %s |\n\n' "$IS_PRERELEASE"
-                printf '合并到 `%s` 后，GitHub 的 release-tag workflow ' "$CNB_DEFAULT_BRANCH"
-                printf '会自动打 tag 并构建发布；CNB 这边的制品库产物也已同步产出。\n\n'
-                printf -- '---\n'
-                printf '*此 PR 由 CNB 流水线自动创建。*\n'
-              } > "$PRBODY"
-
-              python3 ./scripts/cnb-pr.py \
-                --repo  "${CNB_REPO_SLUG}" \
-                --head  "$BRANCH" \
-                --base  "${CNB_DEFAULT_BRANCH}" \
-                --title "chore(release): ${APP_VERSION}" \
-                --body-file /tmp/cnb-pr-body.md
-
-              # 回到原分支，后面的构建要在原始代码上跑
-              git checkout "${CNB_BRANCH}"
-            else
-              echo "版本号未变化（演练或非发版提交），跳过开 PR"
-            fi
+            # 为什么不内联在这里：CNB 的 script 以 sh 兼容方式执行，
+            # `[[ ]]` 会报 `sh: N: [[: not found`，而且 dash 对未知
+            # 命令返回 0，错误还会被吞掉，跑到后面才炸。改用独立
+            # 文件 + 显式 bash 调用，不依赖平台默认 shell。
+            bash ./scripts/release-prepare.sh "$CNB_COMMIT_MESSAGE_TITLE"
 
             # --- 依赖 ---
             #
