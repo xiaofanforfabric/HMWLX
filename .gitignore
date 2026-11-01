@@ -48,3 +48,7 @@ __pycache__/
 
 # 本地/CI 下载的工具链（scripts/install-zig.sh 可能会用）
 .tooling/
+
+# 拆分前的旧打包脚本：留在本地备查，不入库。
+# 现在用的是 scripts/pack-deb.sh / pack-rpm.sh / pack-appimage.sh。
+scripts/pack-linux-formats.sh.old
