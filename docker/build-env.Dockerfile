@@ -87,19 +87,29 @@ RUN set -eux; \
 # 注意这两个必须放在一起、保持 usr/bin 相对位置：官方的 AppRun
 # 靠 $this_dir/usr/bin 找 mksquashfs，单独拷一个二进制会失败。
 #
-# 具体下载/展开逻辑在 scripts/install-appimagetool.sh，
-# GitHub Actions（没有我们的镜像）也调它，避免两处各写一遍。
+# 为什么不用 COPY 拿 scripts/install-appimagetool.sh：
+#   CNB 的 docker.build 只把 Dockerfile 本身传进 build context，
+#   日志里能看到 `load build context / transferring context: 2B`
+#   —— 也就是空的。COPY 任何仓库文件都会报
+#     "/scripts/xxx.sh": not found
+#   所以这里必须自包含，不能依赖 context。
 #
-# 用 ENV 而不是 ARG：脚本读的是环境变量 APPIMAGETOOL_URL，
-# ARG 只在 RUN 的那一行里可见，脚本里取不到。
+# GitHub Actions 那边（没有这个镜像）用的是
+# scripts/install-appimagetool.sh，两边的下载/展开步骤保持一致。
 ENV APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-COPY scripts/install-appimagetool.sh /tmp/install-appimagetool.sh
 RUN set -eux; \
-    chmod +x /tmp/install-appimagetool.sh; \
-    /tmp/install-appimagetool.sh /opt/appimagetool; \
-    rm -f /tmp/install-appimagetool.sh; \
+    mkdir -p /opt/appimagetool; \
+    curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 \
+        -o /tmp/appimagetool.AppImage "$APPIMAGETOOL_URL"; \
+    chmod +x /tmp/appimagetool.AppImage; \
+    cd /tmp; \
+    /tmp/appimagetool.AppImage --appimage-extract >/dev/null; \
+    cp -a /tmp/squashfs-root/. /opt/appimagetool/; \
+    rm -rf /tmp/squashfs-root /tmp/appimagetool.AppImage; \
     test -x /opt/appimagetool/usr/bin/appimagetool; \
-    test -x /opt/appimagetool/usr/bin/mksquashfs
+    test -x /opt/appimagetool/usr/bin/mksquashfs; \
+    ln -sf /opt/appimagetool/usr/bin/appimagetool /usr/local/bin/appimagetool; \
+    /usr/local/bin/appimagetool --version
 
 # mksquashfs 也放进 PATH：appimagetool 在部分环境下会优先找
 # PATH 里的 mksquashfs，找不到才回落到自带的那份。两条路都铺上。
