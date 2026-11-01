@@ -26,14 +26,23 @@ mode 是可执行位（0755 或 0644）。Linux/macOS 解压时按它还原，
 """
 
 import argparse
+import hashlib
 import lzma
 import os
 import struct
 import sys
 
 MAGIC = b"HMWLXSFX"
-TRAILER_FMT = "<8sQQI"
-TRAILER_SIZE = struct.calcsize(TRAILER_FMT)   # 28 字节
+# 字段：magic[8] + indexOffset(u64) + indexSize(u64) + count(u32)
+#       + contentHash(u32)
+#
+# contentHash 是打包时算出的载荷内容指纹，启动器用它做缓存目录
+# 名的一部分。**必须**有：早期版本只用 (indexSize, count) 当指纹，
+# 而这两个值在「改了 jar 内容、但文件数和路径长度都没变」时完全
+# 相同 —— 用户换了新 EXE，启动器却认成「已解压」，继续跑旧的
+# jar。表现就是「更新了启动器，内容还是老版本」。
+TRAILER_FMT = "<8sQQII"
+TRAILER_SIZE = struct.calcsize(TRAILER_FMT)   # 32 字节
 
 # LZMA1 参数。props[0] 的布局由 LZMA SDK 的 LzmaProps_Decode 定义：
 #
@@ -94,10 +103,24 @@ def build(stub_path, payload_dir, output_path, level=9):
     total_orig = 0
     total_packed = 0
 
+    # 载荷内容指纹：把所有「路径 + 大小 + 内容」滚进一个 u32。
+    #
+    # 为什么不直接用 (indexSize, count)：那两个值只看「名字总长度
+    # 和条目数」，改了 jar 内容而文件结构不变时完全相同，启动器
+    # 会误判成「已解压」，用户换了新 EXE 却还在跑旧 jar。
+    #
+    # 用 blake2b（标准库，比 md5 快且无碰撞顾虑），取前 4 字节。
+    # 32 位空间对「判断自己是不是同一版」足够了 —— 碰撞概率相当于
+    # 随机 40 亿分之一的版本对才可能撞上。
+    content_hasher = hashlib.blake2b(digest_size=4)
+
     for i, (rel, full, is_dir) in enumerate(items):
         if is_dir:
             # 目录条目：不占数据，只在索引里标记（名字以 / 结尾）
             blobs.append((b"", 0, 0, rel, 0o755))
+            # 目录名也要进指纹：空目录的有无也算内容变化
+            content_hasher.update(b"D")
+            content_hasher.update(rel.encode("utf-8"))
             continue
 
         with open(full, "rb") as f:
@@ -107,6 +130,13 @@ def build(stub_path, payload_dir, output_path, level=9):
         # 但 C 端 LzmaDecode 在 dstLen=0 时行为不明确，所以这里
         # 保持统一——空文件也压缩，解压侧写 0 字节即可。
         compressed = lzma.compress(data, format=lzma.FORMAT_RAW, filters=FILTERS)
+
+        # 指纹：路径 + 内容。用原始内容而不是压缩后的 —— 压缩
+        # 结果可能随库版本变化，那不是「内容变化」。
+        content_hasher.update(b"F")
+        content_hasher.update(rel.encode("utf-8"))
+        content_hasher.update(struct.pack("<Q", len(data)))
+        content_hasher.update(data)
 
         total_orig += len(data)
         total_packed += len(compressed)
@@ -119,7 +149,9 @@ def build(stub_path, payload_dir, output_path, level=9):
         if (i + 1) % 500 == 0:
             print(f"  已压缩 {i + 1}/{len(items)} …", end="\r")
 
+    content_hash = struct.unpack("<I", content_hasher.digest())[0]
     print(f"  原始 {total_orig / 1048576:.1f} MB -> 压缩 {total_packed / 1048576:.1f} MB")
+    print(f"  内容指纹: {content_hash:08x}")
 
     # ---- 布局：PE 映像 + 各块数据 + 索引 + trailer ----
     #
@@ -149,7 +181,8 @@ def build(stub_path, payload_dir, output_path, level=9):
         body.extend(name_bytes)
     index_size = len(body) - index_offset
 
-    body.extend(struct.pack(TRAILER_FMT, MAGIC, index_offset, index_size, len(entries)))
+    body.extend(struct.pack(TRAILER_FMT, MAGIC, index_offset, index_size,
+                            len(entries), content_hash))
 
     with open(output_path, "wb") as f:
         f.write(body)

@@ -54,7 +54,7 @@
 
 /* 文件末尾的魔数，用于识别「这个 exe 是不是自解压包」 */
 static const char TRAILER_MAGIC[8] = { 'H','M','W','L','X','S','F','X' };
-#define TRAILER_SIZE (8 + 8 + 8 + 4)   /* magic + indexOff + indexSize + count */
+#define TRAILER_SIZE (8 + 8 + 8 + 4 + 4)   /* magic + indexOff + indexSize + count + contentHash */
 
 /* ------------------------------------------------------------------ 结构 */
 
@@ -483,9 +483,11 @@ static int load_index(SFXIndex *idx)
 
     uint64_t indexOff, indexSize;
     uint32_t count;
+    uint32_t contentHash;
     memcpy(&indexOff, tail + 8, 8);
     memcpy(&indexSize, tail + 16, 8);
     memcpy(&count, tail + 24, 4);
+    memcpy(&contentHash, tail + 28, 4);
     free(tail);
 
     if (count == 0 || count > 65536) return -1;
@@ -517,12 +519,18 @@ static int load_index(SFXIndex *idx)
     free(raw);
 
     /*
-     * 缓存目录名用「索引区大小 + 条目数」做指纹，而不是真正的哈希。
-     * 理由：这两个值任何内容变化都会导致不同，且不用在 C 里引额外算法。
-     * 万一碰撞，顶多是复用了旧版本目录，MARK_FILE 里还存了同样的指纹。
+     * 缓存目录名 = 载荷内容指纹（由 scripts/make-sfx.py 打包时算好，
+     * 写在 trailer 里）。
+     *
+     * 为什么不能用「索引区大小 + 条目数」：那两个值只看名字总长度和
+     * 条目数，改了 jar 内容而文件结构不变时完全相同，启动器会误判
+     * 成「已解压」，用户换了新 EXE 却还在跑旧 jar。
+     *
+     * 带上 indexSize 和 count 也算再加一层保护：万一内容指纹碰撞
+     * （32 位，概率极低），还有结构信息兜底。
      */
-    snprintf(idx->cacheTag, sizeof(idx->cacheTag), "%08x%08x",
-             (unsigned)indexSize, (unsigned)count);
+    snprintf(idx->cacheTag, sizeof(idx->cacheTag), "%08x-%08x-%08x",
+             (unsigned)contentHash, (unsigned)indexSize, (unsigned)count);
     return 0;
 
 bad:
