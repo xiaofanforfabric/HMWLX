@@ -116,6 +116,20 @@ jobs:
           BRANCH="release/v${APP_VERSION}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
+          # 幂等：这个分支可能已经存在。
+          #
+          # 典型场景：上一次运行已经把分支推上去了，但后面的
+          # 开 PR 那步失败了；重跑会基于同一个父提交重新提交，
+          # 内容一样但 commit 不同，普通 push 会因为
+          #   ! [rejected] ... (non-fast-forward)
+          # 直接失败。
+          #
+          # 注意提交内容本身是确定的（只有 gradle.properties 的
+          # 一行），所以远端已有的分支就是我们要的结果 ——
+          # 直接复用它，然后强制覆盖成这次算出来的（两者的
+          # 文件内容一定相同）。
+          REMOTE_SHA="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -130,7 +144,21 @@ jobs:
           tag：${RELEASE_TAG}
           预发布：${IS_PRERELEASE}"
 
-          git push origin "$BRANCH"
+          if [[ -n "$REMOTE_SHA" ]]; then
+            echo "分支 $BRANCH 已存在（远端 $REMOTE_SHA），校验内容后覆盖"
+            # 确认远端分支改的也是这一行，避免误覆盖别人的改动
+            REMOTE_VER="$(git show "${REMOTE_SHA}:gradle.properties" 2>/dev/null \
+                          | sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' | tr -d '\r')"
+            if [[ "$REMOTE_VER" != "$APP_VERSION" ]]; then
+              echo "错误：远端 $BRANCH 的 appVersion 是 '$REMOTE_VER'，不是 '$APP_VERSION'" >&2
+              echo "  这个分支可能被别人改过，先人工确认再重跑。" >&2
+              exit 1
+            fi
+            # 内容一致，强推覆盖（只是换了个 commit 时间戳）
+            git push --force-with-lease="refs/heads/$BRANCH:$REMOTE_SHA" origin "$BRANCH"
+          else
+            git push origin "$BRANCH"
+          fi
 
       - name: 开 PR
         if: steps.check.outputs.changed == 'true'
