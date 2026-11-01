@@ -217,11 +217,18 @@
             # fat jar 在 build/libs/，之前从没拷进 dist/，
             # 所以发版产物里一直没有它。用户想「直接 java -jar 跑」
             # 就得有这个。
-            # version.sh 里定义了 FAT_JAR，并处理了版本号不一致时的回退。
-            # shellcheck source=./version.sh
-            source ./scripts/version.sh
-            if [ ! -f "$FAT_JAR" ]; then
-              echo "错误：找不到 fat jar $FAT_JAR" >&2
+            #
+            # 不用 source scripts/version.sh 取 $FAT_JAR ——
+            # CNB 的 script 是 sh 兼容模式，没有 source 内建命令，
+            # 会报 `sh: N: source: not found`（exit 127）。
+            # 直接用 glob 找，版本号变了也不用改这里。
+            FAT_JAR=""
+            for f in build/libs/*-all.jar; do
+              [ -f "$f" ] && FAT_JAR="$f"
+            done
+            if [ -z "$FAT_JAR" ]; then
+              echo "错误：找不到 fat jar（build/libs/*-all.jar）" >&2
+              ls -la build/libs/ 2>/dev/null >&2 || true
               exit 1
             fi
             mkdir -p dist
