@@ -196,35 +196,36 @@
       if: |
         printf '%s' "$CNB_PULL_REQUEST_BRANCH" | grep -qE '^release/'
       stages:
-        - name: build
-          script: |
-            set -euo pipefail
-            echo "PR 合并发版：${CNB_PULL_REQUEST_BRANCH} -> ${CNB_BRANCH}"
-            grep '^appVersion' gradle.properties
-
-            # 构建全部产物（工具检查 + 架构校验 + 打包 + 收集 fat jar）
-            bash ./scripts/cnb-build.sh
-
         - name: tag
           script: |
             set -euo pipefail
+            echo "发版合并：${CNB_PULL_REQUEST_BRANCH} -> ${CNB_BRANCH}"
+            grep '^appVersion' gradle.properties
+
             # 用合并后的 commit 打 tag（pull_request.merged 的
             # CNB_COMMIT 就是合并后的 SHA）。
             # 脚本内部幂等：远端已有同名 tag 就跳过。
+            #
+            # 打完 tag 会触发下方的 "v*" -> tag_push 流水线，
+            # 真正的构建和发版在那边做。这里故意不构建 ——
+            # tag 是唯一版本标识，构建挂在 tag_push 上天然幂等，
+            # 不会出现「合并时构建一套、重发时又构建另一套」。
             bash ./scripts/cnb-tag.sh
 
-        - name: upload
-          script: |
-            set -euo pipefail
-            echo "=== 发版产物 ==="
-            for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz dist/*-all.jar; do
-              [ -f "$f" ] && echo "$(du -h "$f" | cut -f1)  $f"
-            done
-            echo ""
-            VERSION=$(sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1 | xargs)
-            echo "版本: $VERSION"
 
-
+  # ==========================================================================
+  # tag 出现后：构建 + 发版一条龙
+  #
+  # 这是 CNB 的原生设计 —— tag 代表一个确定的发布版本，构建挂在
+  # tag_push 上：既能自动发版（PR 合并 -> 打 tag -> 这里接手），
+  # 也能在 Tag 详情页手动重新部署。
+  #
+  # 好处：
+  #   - 幂等：同一个 tag 只对应一套产物，重跑也是同一份代码
+  #   - 单一出口：不管是 PR 合并自动打的 tag，还是手动打的，都走这里
+  #   - 可重发：Tag 详情页点部署，基于该 tag 的代码重新构建
+  # ==========================================================================
+  # tag 名匹配：v* （v0.1、v0.1-dev1、v1.0 都覆盖）
   pull_request:
     - name: pr-check
       # 同 push：锁定 amd64，理由见上方 ci pipeline 的注释
@@ -252,3 +253,44 @@
             chmod +x ./gradlew
             # --no-build-cache 的理由同 push 分支，见上方注释。
             ./gradlew test --no-daemon --no-build-cache --stacktrace
+
+
+"v*":
+  tag_push:
+    - name: release-publish
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        build: docker/build-env.Dockerfile
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+          BUILD_ROOT: /build
+        volumes:
+          - main:/root/.gradle:copy-on-write
+          - /build:data
+      stages:
+        - name: build
+          script: |
+            set -euo pipefail
+            echo "tag: ${CNB_BRANCH}"
+            grep '^appVersion' gradle.properties
+
+            # 校验 tag 与 gradle.properties 的版本号一致 ——
+            # 防止手动打了对不上的 tag，产出包名和 tag 不符。
+            VERSION=$(sed -n 's/^appVersion[[:space:]]*=[[:space:]]*//p' gradle.properties | head -1 | xargs)
+            if [ "v${VERSION}" != "${CNB_BRANCH}" ]; then
+              echo "错误：tag ${CNB_BRANCH} 与 appVersion ${VERSION} 不一致" >&2
+              exit 1
+            fi
+
+            # 构建全部产物（工具检查 + 架构校验 + 打包 + 收集 fat jar）
+            bash ./scripts/cnb-build.sh
+
+        - name: upload
+          script: |
+            set -euo pipefail
+            echo "=== 发版产物（tag ${CNB_BRANCH}）==="
+            for f in dist/*.exe dist/*.run dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz dist/*-all.jar; do
+              [ -f "$f" ] && echo "$(du -h "$f" | cut -f1)  $f"
+            done
