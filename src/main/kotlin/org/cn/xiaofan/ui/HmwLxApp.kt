@@ -123,7 +123,7 @@ fun HmwLxApp() {
 
     // 下载中心的准入状态。同样提到这一层：用户可能来回切页面，
     // 放在页面内部的话每次进来都会重新校验一遍（要发两次 HTTP 请求）。
-    val download = rememberDownloadState(launchScope)
+    val download = rememberDownloadState()
 
     // 版本抽屉是否展开。
     var showVersionDrawer by remember { mutableStateOf(false) }

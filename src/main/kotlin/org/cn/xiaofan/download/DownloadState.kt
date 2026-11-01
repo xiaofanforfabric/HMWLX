@@ -4,7 +4,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,9 +74,7 @@ sealed interface DownloadAccess {
  * 而且用户可能反复进出来回切页面。状态放在这里，切换页面不会重置，
  * 也不会因为重组触发重复校验。
  */
-class DownloadState internal constructor(
-    private val scope: CoroutineScope,
-) {
+class DownloadState internal constructor() {
     /** 当前准入状态。初始为 [DownloadAccess.Checking]，进页面就开始校验。 */
     var access by mutableStateOf<DownloadAccess>(DownloadAccess.Checking)
         private set
@@ -103,25 +100,38 @@ class DownloadState internal constructor(
     private var checking = false
 
     /**
-     * 重新校验账号。
+     * 请求重新校验。
      *
-     * <p>每次进入下载页都调一次，而不是只在首次校验后缓存结果：
-     * 用户可能在别的页面退出登录、或者 token 在这期间过期。
-     * 下载是敏感操作，宁可多校验一次。
+     * <p>只推进令牌，真正的校验由页面 `LaunchedEffect(token)` 执行。
+     *
+     * <p>**不要在这里 `checkToken++` 之后又自己 `scope.launch`：**
+     * 令牌变了会让 effect 重跑，而 effect 里又调 recheck()，
+     * 两者互相触发。页面侧订阅令牌、状态侧只负责推进，职责分开。
      */
     fun recheck() {
+        if (checking) return
+        checkToken++
+    }
+
+    /**
+     * 执行一次校验。由页面在 `LaunchedEffect(token)` 里调用。
+     *
+     * <p>校验协程挂在页面的 effect 上，页面切走时自动取消 ——
+     * 不会出现「页面已经走了，结果才回来」覆盖新状态。
+     *
+     * <p>用 suspend 而不是 `scope.launch`：后者挂在 `HmwLxApp` 的 scope 上，
+     * 页面切走不会取消，用户快速来回切面板会并发跑多个校验，
+     * 最后谁覆盖谁不确定。
+     */
+    suspend fun runCheck() {
         if (checking) return
         checking = true
         access = DownloadAccess.Checking
         errorDetail = null
-        checkToken++
-
-        scope.launch {
-            try {
-                access = checkAccess()
-            } finally {
-                checking = false
-            }
+        try {
+            access = checkAccess()
+        } finally {
+            checking = false
         }
     }
 
@@ -312,10 +322,6 @@ private typealias LastUsedAccountAccess =
  * 那是白花的流量，也是不必要的账号信息外发。
  */
 @androidx.compose.runtime.Composable
-fun rememberDownloadState(
-    scope: CoroutineScope,
-): DownloadState {
-    return androidx.compose.runtime.remember(scope) {
-        DownloadState(scope)
-    }
+fun rememberDownloadState(): DownloadState {
+    return androidx.compose.runtime.remember { DownloadState() }
 }

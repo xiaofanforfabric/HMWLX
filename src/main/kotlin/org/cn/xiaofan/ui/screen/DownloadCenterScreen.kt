@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,8 +52,11 @@ fun DownloadCenterScreen(
     // 位置固定），key 恒等就不会重跑 —— 结果是第一次校验成功后，
     // 之后进多少次都用缓存状态。挂在 token 上，每次进页面 recheck()
     // 推进令牌，这次 effect 必然重跑。
+    //
+    // 注意 recheck() 只推进令牌、不自己 launch：否则令牌变化让 effect 重跑，
+    // effect 又调 recheck()，两者互相触发。这里订阅、那边推进，职责分开。
     LaunchedEffect(state.token) {
-        state.recheck()
+        state.runCheck()
     }
 
     Surface(
@@ -109,7 +113,8 @@ private fun CheckingView() {
 @Composable
 private fun DeniedView(state: DownloadState) {
     val denied = state.access as? DownloadAccess.Denied
-    val messageKey = when (denied?.reason) {
+    val reason = denied?.reason
+    val messageKey = when (reason) {
         DownloadAccess.DenyReason.NETWORK_UNAVAILABLE -> TextKey.DOWNLOAD_NETWORK_UNAVAILABLE
         DownloadAccess.DenyReason.RATE_LIMITED -> TextKey.DOWNLOAD_RATE_LIMITED
         // 其余情况（没账号 / 凭据失效 / 未预期）统一用同一句：
@@ -117,17 +122,32 @@ private fun DeniedView(state: DownloadState) {
         else -> TextKey.DOWNLOAD_REQUIRE_MS_ACCOUNT
     }
 
+    // 只有「等一下可能就好了」的原因才值得给重试按钮。
+    // 没账号 / 凭据失效时重试只会得到同样结果，给按钮反而像坏了。
+    val retryable = reason == DownloadAccess.DenyReason.NETWORK_UNAVAILABLE ||
+        reason == DownloadAccess.DenyReason.RATE_LIMITED
+
     Box(
         modifier = Modifier.fillMaxSize().padding(48.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text(messageKey),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.error,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 560.dp),
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Text(
+                text = text(messageKey),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.widthIn(max = 560.dp),
+            )
+            if (retryable) {
+                OutlinedButton(onClick = { state.recheck() }) {
+                    Text(text(TextKey.DOWNLOAD_RECHECK))
+                }
+            }
+        }
     }
 }
 
