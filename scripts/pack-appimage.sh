@@ -43,7 +43,8 @@ echo "→ 构建 AppImage…"
 #   1. $APPIMAGETOOL 显式指定
 #   2. PATH 里的 appimagetool（镜像里是 /usr/local/bin 的软链）
 #   3. 镜像里展开好的真二进制
-#   4. /tmp/appimagetool（手工下载的旧备选路径）
+#   4. $HOME/.local/appimagetool（GitHub runner 用 scripts/install-appimagetool.sh 装的）
+#   5. /tmp/appimagetool（手工下载的旧备选路径）
 #
 # 用展开后的 usr/bin/appimagetool 而不是 AppImage 本体：
 # 容器里通常没有 FUSE，直接执行 AppImage 会失败；展开后是
@@ -52,6 +53,7 @@ APPIMAGE_TOOL=""
 for c in "${APPIMAGETOOL:-}" \
          "$(command -v appimagetool || true)" \
          /opt/appimagetool/usr/bin/appimagetool \
+         "${HOME:-/root}/.local/appimagetool/usr/bin/appimagetool" \
          /tmp/appimagetool; do
     if [[ -n "$c" && -x "$c" ]]; then
         APPIMAGE_TOOL="$c"

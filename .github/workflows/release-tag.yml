@@ -193,6 +193,17 @@ jobs:
             fontconfig fonts-dejavu-core \
             zip unzip rpm xz-utils file
 
+      - name: 安装 appimagetool
+        # GitHub 托管 runner 上没有我们的 docker/build-env.Dockerfile，
+        # 镜像里预置的 /opt/appimagetool 不存在，必须在这里装。
+        # 详见 scripts/install-appimagetool.sh 顶部注释。
+        run: |
+          set -euo pipefail
+          chmod +x scripts/install-appimagetool.sh
+          DEST="$HOME/.local/appimagetool"
+          ./scripts/install-appimagetool.sh "$DEST"
+          echo "$DEST/usr/bin" >> "$GITHUB_PATH"
+
       - name: 安装 zig
         # 用官方 tarball 而不是第三方 action：版本可控，且不依赖
         # action 的维护状态。0.13.0 是本地验证过的版本。

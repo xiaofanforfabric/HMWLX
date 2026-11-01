@@ -123,6 +123,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             zip unzip rpm xz-utils file
 
+      - name: 安装 appimagetool
+        # GitHub runner 上跑的是 GitHub 托管的 ubuntu-latest，不是
+        # 我们的 docker/build-env.Dockerfile，所以镜像里预置的
+        # /opt/appimagetool 不存在，必须在这里装一次。
+        #
+        # 装到 $HOME/.local 而不是 /opt：这一层不用 sudo 更省事，
+        # 后面的 PATH 也一起加进去。
+        run: |
+          set -euo pipefail
+          chmod +x scripts/install-appimagetool.sh
+          DEST="$HOME/.local/appimagetool"
+          ./scripts/install-appimagetool.sh "$DEST"
+          # appimagetool 需要能调 mksquashfs，把它所在目录加进 PATH
+          echo "$DEST/usr/bin" >> "$GITHUB_PATH"
+
       - name: 安装 zig
         # 用官方 tarball，版本固定。0.13.0 是本地验证过的版本。
         run: |
