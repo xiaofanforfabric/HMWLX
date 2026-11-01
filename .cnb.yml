@@ -214,18 +214,23 @@
 
 
   # ==========================================================================
-  # tag 出现后：构建 + 发版一条龙
+  # 模拟 PR 合并：cprm: 提交手动触发
   #
-  # 这是 CNB 的原生设计 —— tag 代表一个确定的发布版本，构建挂在
-  # tag_push 上：既能自动发版（PR 合并 -> 打 tag -> 这里接手），
-  # 也能在 Tag 详情页手动重新部署。
+  # 用途：验证「打 tag -> 触发 tag_push -> 构建发版」这条链路。
   #
-  # 好处：
-  #   - 幂等：同一个 tag 只对应一套产物，重跑也是同一份代码
-  #   - 单一出口：不管是 PR 合并自动打的 tag，还是手动打的，都走这里
-  #   - 可重发：Tag 详情页点部署，基于该 tag 的代码重新构建
+  # 为什么需要它：真正的 pull_request.merged 只有在平台上真的点合并
+  # PR 才会触发。想验证一次就得完整走「回滚 -> 删 GitHub Release
+  # -> 删 tag -> 重推 dev」那一套，成本太高，而且容易把已经发好的
+  # 版本弄乱。
+  #
+  # 用法：git commit --allow-empty -m "cprm:" && git push
+  #
+  # 它跟 pull_request.merged 干完全一样的事 —— 打 tag，然后靠
+  # tag_push 接手。唯一区别是触发方式：一个是平台事件，一个是
+  # 提交信息前缀。所以它能验证的正是我们关心的那段链路。
+  #
+  # 注意：打出来的 tag 是真的。验证完想重来，得先删 tag。
   # ==========================================================================
-  # tag 名匹配：v* （v0.1、v0.1-dev1、v1.0 都覆盖）
   pull_request:
     - name: pr-check
       # 同 push：锁定 amd64，理由见上方 ci pipeline 的注释
@@ -254,7 +259,56 @@
             # --no-build-cache 的理由同 push 分支，见上方注释。
             ./gradlew test --no-daemon --no-build-cache --stacktrace
 
+cprm:
+  push:
+    - name: simulate-merged
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        build: docker/build-env.Dockerfile
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        volumes:
+          - main:/root/.gradle:copy-on-write
+      # 只在主分支上跑 —— cprm: 提交推送到别的分支没有意义
+      if: |
+        printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}" \
+        && printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^cprm:'
+      stages:
+        - name: tag
+          script: |
+            set -euo pipefail
+            echo "【模拟 PR 合并】提交：$CNB_COMMIT_MESSAGE_TITLE"
+            grep '^appVersion' gradle.properties
 
+            # 和 pull_request.merged 的打 tag 逻辑完全一致。
+            # 这个测试的意义就在于验证「打完 tag 之后 tag_push
+            # 会不会自己接上」，所以这里绝不能顺手把构建也做了 ——
+            # 那样验证的就不是链路了。
+            bash ./scripts/cnb-tag.sh
+
+            echo ""
+            echo "tag 已推送。接下来要观察的是："
+            echo "  CNB 是否自动启动了一条 tag_push 流水线？"
+            echo "  如果启动了，说明链路通；如果没启动，说明"
+            echo "  用 CNB_TOKEN 推 tag 不触发新流水线（递归保护），"
+            echo "  需要改成在同一个流水线里串行构建。"
+
+
+# ==========================================================================
+# tag 出现后：构建 + 发版一条龙
+#
+# 这是 CNB 的原生设计 —— tag 代表一个确定的发布版本，构建挂在
+# tag_push 上：既能自动发版（PR 合并 -> 打 tag -> 这里接手），
+# 也能在 Tag 详情页手动重新部署。
+#
+# 好处：
+#   - 幂等：同一个 tag 只对应一套产物，重跑也是同一份代码
+#   - 单一出口：不管是 PR 合并自动打的 tag，还是手动打的，都走这里
+#   - 可重发：Tag 详情页点部署，基于该 tag 的代码重新构建
+# ==========================================================================
+# tag 名匹配：v* （v0.1、v0.1-dev1、v1.0 都覆盖）
 "v*":
   tag_push:
     - name: release-publish
