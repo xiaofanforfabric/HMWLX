@@ -1,6 +1,5 @@
 package org.cn.xiaofan.download
 
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -75,7 +74,6 @@ sealed interface DownloadAccess {
  * 而且用户可能反复进出来回切页面。状态放在这里，切换页面不会重置，
  * 也不会因为重组触发重复校验。
  */
-@Stable
 class DownloadState internal constructor(
     private val scope: CoroutineScope,
 ) {
@@ -86,6 +84,19 @@ class DownloadState internal constructor(
     /** 校验失败时的错误详情（网络错误信息等），供日志和「重新校验」时展示。 */
     var errorDetail by mutableStateOf<String?>(null)
         private set
+
+    /**
+     * 触发令牌，供界面订阅。
+     *
+     * <p>和 [org.cn.xiaofan.version.VersionState] 同一条路子：页面 `LaunchedEffect(token)`
+     * 一变就重跑。只用 `LaunchedEffect(Unit)` 的话，Compose 复用同一处调用点
+     * 时 key 恒等，换页回来不会重跑 —— 这里必须能真的重新校验。
+     */
+    internal var checkToken by mutableStateOf(0)
+        private set
+
+    /** 详见 [checkToken]。 */
+    internal val token: Int get() = checkToken
 
     /** 防止重复校验。 */
     private var checking = false
@@ -102,6 +113,7 @@ class DownloadState internal constructor(
         checking = true
         access = DownloadAccess.Checking
         errorDetail = null
+        checkToken++
 
         scope.launch {
             try {
@@ -152,8 +164,17 @@ class DownloadState internal constructor(
             addAll(microsoftAccounts.filter { it != current })
         }
 
-        // 记录最后一个"有意义的"失败原因：全都没网时，报网络问题比报凭据失效准确。
-        var lastFailure: DownloadAccess.DenyReason? = null
+        // 失败原因按**类别**记录，不按「最后一次」记录。
+        //
+        // 为什么：循环里"最后一次"往往是噪声最少的那个，专门用来覆盖掉前面的信息。
+        // 一个账号网络断了、后面跟着两个凭据失效，「最后一次」就成了凭据失效，
+        // 用户被引导去重登一个根本没问题的账号。所以分开记：
+        // 只要有任何一次是网络/限流，就说明「我们没能验证」，
+        // 这个结论与别的账号失效与否无关，优先级最高。
+        var sawNetwork = false
+        var sawRateLimit = false
+        var sawCredentialInvalid = false
+        var sawUnexpected = false
         var lastDetail: String? = null
 
         for (account in ordered) {
@@ -165,7 +186,8 @@ class DownloadState internal constructor(
                     val ok = result.account
                     if (!ok.isMicrosoftAccount) {
                         // refresh 不该换掉 provider。真发生了说明数据被改过，跳过这个继续试。
-                        lastFailure = DownloadAccess.DenyReason.NOT_MICROSOFT
+                        // 这是「账号数据坏了」，不是「你网络断了」，归到未预期更诚实。
+                        sawUnexpected = true
                         lastDetail = "账号 ${ok.name} 刷新后 provider 变了：${ok.provider}"
                         continue
                     }
@@ -173,65 +195,60 @@ class DownloadState internal constructor(
                 }
 
                 is AuthPreflight.Result.NetworkFailure -> {
-                    // 网络问题的优先级高于凭据失效：它不代表账号无效，只是查不了。
-                    // 一个账号网络失败、另一个账号凭据失效时，报"连不上微软"
-                    // 比报"账号失效"更准确 —— 后者会让用户白白去重登。
-                    lastFailure = DownloadAccess.DenyReason.NETWORK_UNAVAILABLE
+                    // 网络问题不代表账号无效，只是这次没验证成。
+                    sawNetwork = true
                     lastDetail = result.detail
                 }
 
                 is AuthPreflight.Result.RateLimited -> {
-                    // 限流同理：不代表账号有问题。
-                    if (lastFailure != DownloadAccess.DenyReason.NETWORK_UNAVAILABLE) {
-                        lastFailure = DownloadAccess.DenyReason.RATE_LIMITED
-                        lastDetail = result.detail
-                    }
+                    // 限流同理：请求送到了，只是被挡回来。
+                    sawRateLimit = true
+                    lastDetail = result.detail
                 }
 
                 is AuthPreflight.Result.CredentialInvalid -> {
                     // 这个账号失效了，试下一个。只有当所有账号都失效才整体拒绝。
-                    // 注意不能被网络/限流覆盖：那两类原因对用户更有指导意义。
-                    if (lastFailure == null ||
-                        lastFailure == DownloadAccess.DenyReason.CREDENTIAL_INVALID
-                    ) {
-                        lastFailure = DownloadAccess.DenyReason.CREDENTIAL_INVALID
-                        lastDetail = result.detail
-                    }
+                    sawCredentialInvalid = true
+                    lastDetail = result.detail
                 }
 
                 is AuthPreflight.Result.SessionExpired -> {
-                    if (lastFailure == null) {
-                        lastFailure = DownloadAccess.DenyReason.CREDENTIAL_INVALID
-                        lastDetail = "会话已过期"
-                    }
+                    sawCredentialInvalid = true
+                    lastDetail = "会话已过期"
                 }
 
                 is AuthPreflight.Result.ProviderUnavailable -> {
-                    if (lastFailure == null) {
-                        lastFailure = DownloadAccess.DenyReason.UNEXPECTED
-                        lastDetail = result.detail
-                    }
+                    sawUnexpected = true
+                    lastDetail = result.detail
                 }
 
                 is AuthPreflight.Result.Unexpected -> {
-                    if (lastFailure == null) {
-                        lastFailure = DownloadAccess.DenyReason.UNEXPECTED
-                        lastDetail = result.detail
-                    }
+                    sawUnexpected = true
+                    lastDetail = result.detail
                 }
 
                 is AuthPreflight.Result.NoAccount -> {
-                    // 不应该发生：我们从账号列表里取的。真到了这里当失效处理。
-                    if (lastFailure == null) {
-                        lastFailure = DownloadAccess.DenyReason.NOT_MICROSOFT
-                        lastDetail = "刷新时报告无账号"
-                    }
+                    // 不应该发生：我们从账号列表里取的。真到了这里当账号失效处理。
+                    sawCredentialInvalid = true
+                    lastDetail = "刷新时报告无账号"
                 }
             }
         }
 
+        // 收敛：网络 > 限流 > 凭据失效 > 其它。
+        //
+        // 前两类都属于「我们没能验证」，不能告诉用户「你的账号不行」——
+        // 他会白白去重登一个本来好好的账号。凭据失效只有在
+        // 所有账号都明确失效时才是事实。
+        val reason = when {
+            sawNetwork -> DownloadAccess.DenyReason.NETWORK_UNAVAILABLE
+            sawRateLimit -> DownloadAccess.DenyReason.RATE_LIMITED
+            sawCredentialInvalid -> DownloadAccess.DenyReason.CREDENTIAL_INVALID
+            else -> DownloadAccess.DenyReason.UNEXPECTED
+        }
+
         errorDetail = lastDetail ?: "所有微软账号均校验失败"
-        DownloadAccess.Denied(lastFailure ?: DownloadAccess.DenyReason.UNEXPECTED)
+        DownloadAccess.Denied(reason)
     }
 
     /**

@@ -45,9 +45,13 @@ import org.cn.xiaofan.i18n.text
 fun DownloadCenterScreen(
     state: DownloadState,
 ) {
-    // 每次进入页面都重新校验：用户可能刚在别的页面退出登录，
-    // 或者 token 在这期间过期。下载是敏感操作，宁可多查一次。
-    LaunchedEffect(Unit) {
+    // 重新校验挂在 state.token 上，而不是 Unit。
+    //
+    // key 为 Unit 时，Compose 复用同一处调用点（本页是整个替换掉的，
+    // 位置固定），key 恒等就不会重跑 —— 结果是第一次校验成功后，
+    // 之后进多少次都用缓存状态。挂在 token 上，每次进页面 recheck()
+    // 推进令牌，这次 effect 必然重跑。
+    LaunchedEffect(state.token) {
         state.recheck()
     }
 
