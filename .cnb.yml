@@ -204,6 +204,28 @@
             echo "=== 产物 ==="
             ls -lh dist/
 
+        # ------------------------------------------------------------------
+        # 打 tag
+        #
+        # 原来设计上 tag 完全交给 GitHub 的 release-tag.yml，CNB 只构建。
+        # 但 GitHub 那边 verify 的输出写进 $GITHUB_ENV，同 step 读不到，
+        # 合并 PR 后一直没打出 tag。补上这一步，CNB 自己闭环发版。
+        #
+        # 幂等：远端已有同名 tag 就跳过，两个平台不会互相冲突。
+        # 只在主分支跑（脚本内部判断），release/xx 分支不碰。
+        # ------------------------------------------------------------------
+        - name: release-tag
+          # 只在「主分支的普通提交」上打 tag —— 也就是 PR 合并后的那次
+          # push。发版前缀（dev:/rel: 等）的那次 push 版本号还没推进，
+          # 打 tag 会拿到旧版本号；而且那种提交走的是开 PR 流程，
+          # tag 要等合并之后才该出现。
+          if: |
+            printf '%s' "$CNB_BRANCH" | grep -qx "${CNB_DEFAULT_BRANCH:-master}" \
+            && ! printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'
+          script: |
+            set -euo pipefail
+            bash ./scripts/cnb-tag.sh
+
         - name: release-upload
           if: |
             printf '%s' "$CNB_COMMIT_MESSAGE_TITLE" | grep -qiE '^(rel|beta|RC|dev|test):'

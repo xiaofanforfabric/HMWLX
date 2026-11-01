@@ -88,19 +88,26 @@ if [[ -n "${CNB_TOKEN:-}" ]]; then
     else
         _url="https://${CNB_WEB_HOST}/${CNB_REPO_SLUG}.git"
     fi
-    _user="${CNB_TOKEN_USER_NAME:-cnb}"
-    # 令牌写进临时凭据文件，而不是塞进 URL ——
-    # git 报错时会把含令牌的 URL 原样打出来，日志里就泄漏了。
-    # 用 credential.helper=store + 临时文件，命令行里只有干净地址。
-    CRED_FILE="$(mktemp)"
-    chmod 600 "$CRED_FILE"
-    _clean="${_url#https://}"
-    _clean="${_clean#http://}"
-    printf 'https://%s:%s@%s\n' "$_user" "$CNB_TOKEN" "${_clean#*@}" > "$CRED_FILE"
+    # 统一补上 .git 后缀：CNB_REPO_URL_HTTPS 可能带也可能不带，
+    # git 对两种都能识别，但显式补上更稳。
+    [[ "$_url" == *.git ]] || _url="${_url%.git}.git"
+
+    # 用 http.extraheader 传 Basic 认证，而不是写凭据文件。
+    #
+    # 为什么：credential.helper=store --file=... 这写在
+    # 老版本 git 上不认（它把整串当成 helper 名），报
+    #   git: 'credential-store --file=...' is not a git command
+    # 但日志里只有 exit 128，看起来像是推送本身出错，很难查。
+    #
+    # extraheader 是 git 1.7+ 都支持的：
+    #   Authorization: Basic base64(user:token)
+    # 而且它只作用于本次命令，不落盘、不进 URL、不会出现在
+    # 错误信息里。
+    _basic="$(printf '%s:%s' "${CNB_TOKEN_USER_NAME:-cnb}" "$CNB_TOKEN" | base64 | tr -d '\n')"
     export GIT_TERMINAL_PROMPT=0
     REMOTE="${_url}"
-    GIT_CRED_OPTS=(-c "credential.helper=store --file=$CRED_FILE")
-    unset _url _clean _user
+    GIT_CRED_OPTS=(-c "http.${_url}.extraheader=Authorization: Basic ${_basic}")
+    unset _url _basic
 else
     # 本地直接跑脚本时没有 CNB_TOKEN，回落到 origin
     echo "（没有 CNB_TOKEN，用 origin）"
@@ -109,8 +116,8 @@ else
     GIT_CRED_OPTS=()
 fi
 
-_cleanup_cred() { [[ -n "$CRED_FILE" ]] && rm -f "$CRED_FILE"; }
-trap _cleanup_cred EXIT
+# 清理逻辑统一放在 _cleanup_all，见下方 PRBODY 创建之后。
+# 这里只记录文件路径，不注册 trap —— 重复注册会互相覆盖。
 
 git config user.name  "cnb"
 git config user.email "cnb@cnb.cool"
@@ -137,16 +144,33 @@ if [[ -n "$REMOTE_SHA" ]]; then
         exit 1
     fi
     echo "远端已有 $BRANCH（$REMOTE_SHA），内容一致，覆盖"
-    git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" \
-        "$REMOTE" "$BRANCH"
+    _push_out="$(git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" \
+        "$REMOTE" "$BRANCH" 2>&1)" || {
+        echo "错误：推送 $BRANCH 失败：" >&2
+        printf '%s\n' "$_push_out" >&2
+        exit 1
+    }
+    printf '%s\n' "$_push_out"
+    unset _push_out
 else
-    git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push "$REMOTE" "$BRANCH"
+    _push_out="$(git ${GIT_CRED_OPTS[@]+"${GIT_CRED_OPTS[@]}"} push "$REMOTE" "$BRANCH" 2>&1)" || {
+        echo "错误：推送 $BRANCH 失败：" >&2
+        printf '%s\n' "$_push_out" >&2
+        exit 1
+    }
+    printf '%s\n' "$_push_out"
+    unset _push_out
 fi
 
 # ---------------------------------------------------------------- PR 正文
 PRBODY="$(mktemp)"
-# shellcheck disable=SC2064
-trap "rm -f '$CI_ENV_FILE' '$PRBODY'" EXIT
+# 一个 EXIT trap 管所有清理。同一个信号只能挂一个处理函数，
+# 挂第二个会把前一个顶掉。
+_cleanup_all() {
+    rm -f "$CI_ENV_FILE" 2>/dev/null || true
+    [[ -n "${PRBODY:-}" ]] && rm -f "$PRBODY" 2>/dev/null || true
+}
+trap _cleanup_all EXIT
 
 {
     printf '## 发版：%s\n\n' "$APP_VERSION"

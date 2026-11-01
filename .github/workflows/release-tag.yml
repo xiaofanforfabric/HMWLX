@@ -102,11 +102,23 @@ jobs:
           #
           # 任何一项不满足都视为「无需发版」而非失败 ——
           # 因为往主分支推普通提交（非发版 PR）也会触发本 workflow。
+          #
+          # 注意：release.sh 通过 emit_var 把结果写进 $GITHUB_ENV，
+          # 而 $GITHUB_ENV 只在【后续 step】生效，当前 step 的 shell
+          # 读不到。之前这里直接判断 ${RELEASE_TAG:-} 永远是空的，
+          # 于是每次都走 else 分支报「无需发版」—— 合并 PR 后 tag
+          # 从来打不出来。必须自己从文件里读回来。
           if OUT=$(./scripts/release.sh --verify 2>&1); then
             echo "$OUT"
+            # 从 $GITHUB_ENV 读回变量（同 step 内唯一可靠的方式）
+            if [[ -f "${GITHUB_ENV:-/dev/null}" ]]; then
+              # shellcheck disable=SC1090  # 路径由 runner 注入
+              set -a; source "$GITHUB_ENV"; set +a
+            fi
             if [[ -n "${RELEASE_TAG:-}" ]]; then
               echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
               echo "created=yes" >> "$GITHUB_OUTPUT"
+              echo "将打 tag：${RELEASE_TAG}"
             else
               echo "tag=" >> "$GITHUB_OUTPUT"
               echo "created=no" >> "$GITHUB_OUTPUT"
