@@ -3,21 +3,35 @@ package org.cn.xiaofan.ui.screen
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.cn.xiaofan.download.DownloadAccess
 import org.cn.xiaofan.download.DownloadState
+import org.cn.xiaofan.download.MinecraftDownloadService
+import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
 
@@ -58,6 +72,10 @@ fun DownloadCenterScreen(
         state.runCheck()
     }
 
+    // 下载和重新拉清单都用这个 scope：页面切走时协程自动取消，
+    // 不会出现「用户已经去了别的页面，下载结果才弹出来」。
+    val scope = rememberCoroutineScope()
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -65,7 +83,7 @@ fun DownloadCenterScreen(
         when (val access = state.access) {
             is DownloadAccess.Checking -> CheckingView()
 
-            is DownloadAccess.Allowed -> AllowedView(access)
+            is DownloadAccess.Allowed -> AllowedView(access, state, scope)
 
             is DownloadAccess.Denied -> DeniedView(state)
         }
@@ -135,33 +153,220 @@ private fun DeniedView(state: DownloadState) {
 }
 
 /**
- * 放行页。
+ * 放行页：版本列表 + 下载。
  *
- * <p>目前只显示「以谁的身份下载」。真正的版本列表与下载逻辑是下一步的事，
- * 这里先把准入链路跑通 —— 准入没做对就做下载，等于给所有人开门。
+ * <p>只有通过微软正版校验的用户能看到这里 —— 版本清单本身就是受
+ * EULA 保护的数据，不能提前拉好等着。
+ *
+ * <p>清单在进入本页时才拉（`LaunchedEffect(Unit)`），而不是在
+ * [DownloadCenterScreen] 顶层：拒绝态不该产生任何下载相关的网络请求。
  */
 @Composable
-private fun AllowedView(access: DownloadAccess.Allowed) {
-    Box(
+private fun AllowedView(
+    access: DownloadAccess.Allowed,
+    state: DownloadState,
+    scope: CoroutineScope,
+) {
+    // 进入放行页才拉清单。key 用 Unit 是安全的：
+    // 这个 composable 只在 access 变成 Allowed 后进入组合，
+    // 而 loadVersions() 内部对 Loading 态有幂等保护。
+    LaunchedEffect(Unit) {
+        state.loadVersions()
+    }
+
+    Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
-        contentAlignment = Alignment.TopStart,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                text = text(TextKey.DOWNLOAD_TITLE),
-                style = MaterialTheme.typography.headlineSmall,
+        Text(
+            text = text(TextKey.DOWNLOAD_TITLE),
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        // 显示账号名，让用户能确认用的是哪个账号下载的。
+        Text(
+            text = Messages.get(TextKey.DOWNLOAD_ALLOWED_AS, access.playerName),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+
+        // 下载中 / 下载结果提示
+        val installing = state.installing
+        val outcome = state.installResult
+        when {
+            installing != null -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                Text(
+                    text = Messages.get(TextKey.DOWNLOAD_INSTALLING, installing.versionId) +
+                        "  " + installing.stage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            outcome is DownloadState.InstallOutcome.Success -> ResultBanner(
+                text = Messages.get(TextKey.DOWNLOAD_INSTALL_OK, outcome.versionId),
+                isError = false,
+                onDismiss = { state.dismissInstallResult() },
             )
-            // 显示账号名，让用户能确认用的是哪个账号下载的。
-            Text(
-                text = "已通过微软正版账号校验：${access.playerName}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
+
+            outcome is DownloadState.InstallOutcome.Failed -> ResultBanner(
+                text = Messages.get(
+                    TextKey.DOWNLOAD_INSTALL_FAILED,
+                    outcome.versionId,
+                    outcome.reason,
+                ),
+                isError = true,
+                onDismiss = { state.dismissInstallResult() },
             )
-            Text(
-                text = "版本列表与下载功能待接入。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        }
+
+        HorizontalDivider()
+
+        // 版本列表
+        when (val list = state.listState) {
+            is DownloadState.VersionListUi.Idle,
+            is DownloadState.VersionListUi.Loading -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        text = text(TextKey.DOWNLOAD_LIST_LOADING),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            is DownloadState.VersionListUi.Failed -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = Messages.get(TextKey.DOWNLOAD_LIST_FAILED, list.reason),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.widthIn(max = 560.dp),
+                    )
+                    OutlinedButton(onClick = { scope.launch { state.loadVersions() } }) {
+                        Text(text(TextKey.DOWNLOAD_RELOAD_LIST))
+                    }
+                }
+            }
+
+            is DownloadState.VersionListUi.Loaded -> {
+                if (list.versions.isEmpty()) {
+                    Text(
+                        text = text(TextKey.DOWNLOAD_LIST_EMPTY),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = Messages.get(TextKey.DOWNLOAD_LIST_TITLE, list.versions.size),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    DownloadableVersionList(
+                        versions = list.versions,
+                        installingId = installing?.versionId,
+                        enabled = installing == null,
+                        onInstall = { version ->
+                            scope.launch { state.install(version.id) }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 版本列表。
+ *
+ * <p>用 LazyColumn 而不是普通 Column：官方版本有几百个，
+ * 一次性全部组合出来会明显卡顿。
+ */
+@Composable
+private fun DownloadableVersionList(
+    versions: List<MinecraftDownloadService.DownloadableVersion>,
+    installingId: String?,
+    enabled: Boolean,
+    onInstall: (MinecraftDownloadService.DownloadableVersion) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        items(versions, key = { it.id }) { version ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = version.id,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.width(180.dp),
+                )
+                Text(
+                    text = version.type,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                // 正在下载的那个显示进度，其余显示按钮。
+                // 同时只允许一个下载：并发写同一个游戏目录会互相覆盖。
+                if (installingId == version.id) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                } else {
+                    TextButton(
+                        onClick = { onInstall(version) },
+                        enabled = enabled,
+                    ) {
+                        Text(text(TextKey.DOWNLOAD_ACTION))
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+/** 结果提示条。 */
+@Composable
+private fun ResultBanner(
+    text: String,
+    isError: Boolean,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isError) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onDismiss) {
+            Text(text(TextKey.DOWNLOAD_DISMISS))
         }
     }
 }
