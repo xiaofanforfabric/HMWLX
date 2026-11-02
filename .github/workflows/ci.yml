@@ -49,6 +49,11 @@ jobs:
             libx11-6 libxi6 libxrender1 libxtst6 libxext6 libxrandr2 \
             fontconfig fonts-dejavu-core
 
+      # GPL-3.0 要求在源文件里附版权声明。新文件忘加的话，
+      # LICENSE 还在但个别文件看不出归属，合规上有缺口。
+      - name: Check license headers
+        run: python3 ./scripts/add-license-header.py --check
+
       # GUI 相关：Compose Desktop 在无头环境跑不了窗口，
       # 但容器启动测试（BootstrapTest）需要 Skiko/JDK 的 headless 支持。
       - name: Run all tests
