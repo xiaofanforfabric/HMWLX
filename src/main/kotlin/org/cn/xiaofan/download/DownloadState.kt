@@ -208,7 +208,7 @@ class DownloadState internal constructor() {
     /**
      * 下载并安装一个版本。
      *
-     * <p>成功后会推进 [listToken]，界面据此重新扫描本地版本列表，
+     * <p>成功后会推进 [localVersionsToken]，界面据此重新扫描本地版本列表，
      * 让用户立刻看到新装的版本。
      *
      * <p>同样只允许放行态调用 —— 这是最后一道闸，界面层不该是唯一的守卫。

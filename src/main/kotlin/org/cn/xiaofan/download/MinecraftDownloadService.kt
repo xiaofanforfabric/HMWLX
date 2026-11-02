@@ -232,12 +232,14 @@ object MinecraftDownloadService {
 
             // 空 TypedMap = 不强装、不用自定义 URL。
             // 如果以后要支持「重新下载」，在这里 put FORCE_INSTALL=true。
-            val installed = installer.installClient(id, dir, TypedMapImpl())
+            // 不接返回值：上游返回的 Version 没有稳定的版本号取值方法，
+            // 而且 VersionID.toString() 给的是 VersionArg 的标识串
+            // （形如 client/vanilla/1.21.4），直接显示会让用户以为出错。
+            // 该版本号就是用户点的那个，直接用它最可靠。
+            installer.installClient(id, dir, TypedMapImpl())
 
             onProgress("安装完成")
-            // 上游返回的 Version 没有稳定的「版本号」取值方法（不同实现字段不同），
-            // 用请求的 versionId 作为结果最可靠 —— 它就是装好的那个版本。
-            InstallResult.Success(installed.toString().ifBlank { versionId })
+            InstallResult.Success(versionId)
         }.fold(
             onSuccess = { it },
             onFailure = { InstallResult.Failed(it.describe()) },

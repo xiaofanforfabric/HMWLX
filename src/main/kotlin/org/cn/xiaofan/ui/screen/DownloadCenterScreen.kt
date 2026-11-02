@@ -240,10 +240,17 @@ private fun AllowedView(
         HorizontalDivider()
 
         // 版本列表
+        //
+        // 列表区必须用 weight(1f)，不能用 fillMaxSize()：
+        // 在 Column 里 fillMaxSize() 会先按父约束的最大高度占位，
+        // 但 Column 的其它子项（标题、页签、提示条）已经吃掉了一部分，
+        // 结果列表区拿到的高度算成 0 —— 加载失败时那句提示和
+        // 「重新获取」按钮会被压成不可见、点不到。
+        // weight(1f) 让 Column 把**剩余**高度分给它，这才是想要的。
         when (val list = state.listState) {
             is DownloadState.VersionListUi.Idle,
             is DownloadState.VersionListUi.Loading -> Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -260,7 +267,7 @@ private fun AllowedView(
             }
 
             is DownloadState.VersionListUi.Failed -> Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(
@@ -302,7 +309,7 @@ private fun AllowedView(
 
                 if (shown.isEmpty()) {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -312,14 +319,19 @@ private fun AllowedView(
                         )
                     }
                 } else {
-                    DownloadableVersionList(
-                        versions = shown,
-                        installingId = installing?.versionId,
-                        enabled = installing == null,
-                        onInstall = { version ->
-                            scope.launch { state.install(version.id) }
-                        },
-                    )
+                    // weight 必须加在这里：DownloadableVersionList 是独立函数，
+                    // 函数体内部没有 ColumnScope，写 Modifier.weight 会编译不过。
+                    // 用 Box 承接权重、内部列表填满它，职责清楚。
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        DownloadableVersionList(
+                            versions = shown,
+                            installingId = installing?.versionId,
+                            enabled = installing == null,
+                            onInstall = { version ->
+                                scope.launch { state.install(version.id) }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -400,6 +412,8 @@ private fun DownloadableVersionList(
     onInstall: (MinecraftDownloadService.DownloadableVersion) -> Unit,
 ) {
     LazyColumn(
+        // 这里用 fillMaxSize 而不是 weight：外层已经由 Box 接住了
+        // Column 的剩余高度，本函数内部没有 ColumnScope。
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
