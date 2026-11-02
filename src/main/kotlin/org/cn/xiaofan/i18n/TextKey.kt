@@ -214,12 +214,6 @@ object TextKey {
     /** 版本清单加载失败。`{0}` 为原因。 */
     const val DOWNLOAD_LIST_FAILED = "download.list.failed"
 
-    /** 版本清单为空。 */
-    const val DOWNLOAD_LIST_EMPTY = "download.list.empty"
-
-    /** 版本列表标题。`{0}` 为数量。 */
-    const val DOWNLOAD_LIST_TITLE = "download.list.title"
-
     /** 已通过校验，显示账号名。`{0}` 为玩家名。 */
     const val DOWNLOAD_ALLOWED_AS = "download.allowed.as"
 

@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.config.Json
 import org.cn.xiaofan.version.GameVersionService
+import org.cn.xiaofan.version.VersionType
 import java.nio.file.Path
 
 /**
@@ -94,35 +95,23 @@ object MinecraftDownloadService {
      * <p>**必须与上游 headlessmc 用同一个 URL**
      * （见上游 `VanillaFactory`）—— 两边数据源不一致的话，界面列出来的版本
      * 有可能下载时解析不到，用户点了就报错。
+     * <p>用 `piston-meta` 而不是老的 `launchermeta`：后者是旧的入口，
+     * 官方正在往下迁，早晚失效。数据内容一致。
      */
     private const val MANIFEST_URL =
-        "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
     /**
-     * 愚人节版本名单。
+     * 按 Mojang 的 type 与版本号算出界面分类。
      *
-     * <p>Mojang 不给愚人节版本单独的 type，只能靠版本号识别。
-     * 清单来自历年的实际发布，新增年份时在这里补一行。
-     *
-     * <p>为什么不按「版本号是否含字母」之类的规则猜：
-     * 普通快照也是 `25w14a` 这种格式，规则一写就误伤一大片。
+     * <p>愚人节判定复用 [VersionType.isAprilFools]，**不在这里另维护一张表**：
+     * 两张表迟早会不同步，同一个版本会在「已安装列表」和「下载列表」里
+     * 显示成两种分类，用户看着莫名其妙。
      */
-    private val APRIL_FOOLS_IDS = setOf(
-        "15w14a",                  // 2015 爱情与拥抱更新
-        "1.RV-Pre1",               // 2016 时尚更新
-        "3D Shareware v1.34",      // 2019 3D 共享软件
-        "20w14infinite",           // 2020 无限维度
-        "22w13oneBlockAtATime",    // 2022 一次一个方块
-        "23w13a_or_b",             // 2023 投票更新
-        "24w14potato",             // 2024 有毒土豆
-        "25w14craftmine",          // 2025 合成我的世界
-    )
-
-    /** 按 Mojang 的 type 与版本号算出界面分类。 */
     fun classify(id: String, type: String): VersionCategory = when (type) {
         "release" -> VersionCategory.RELEASE
         "old_beta", "old_alpha" -> VersionCategory.LEGACY
-        else -> if (id in APRIL_FOOLS_IDS) {
+        else -> if (VersionType.isAprilFools(id)) {
             VersionCategory.APRIL_FOOLS
         } else {
             VersionCategory.SNAPSHOT

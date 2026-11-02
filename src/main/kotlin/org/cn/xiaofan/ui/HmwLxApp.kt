@@ -125,6 +125,21 @@ fun HmwLxApp() {
     // 放在页面内部的话每次进来都会重新校验一遍（要发两次 HTTP 请求）。
     val download = rememberDownloadState()
 
+    // 下载装完一个版本后，让版本列表重扫一遍磁盘 ——
+    // 否则首页的启动按钮/版本抽屉还是旧的，用户刚下完却看不到。
+    //
+    // 挂在 token 上而不是让 DownloadState 直接持有 VersionState：
+    // 版本模块是「纯读磁盘、不依赖容器」的，不该被下载模块反向依赖。
+    LaunchedEffect(download.localVersionsToken) {
+        // 首次进入（token == 0）时不必重扫：rememberVersionState 自己会扫。
+        //
+        // 用 reloadForced 而不是 reload：后者在有扫描进行中时会吞掉这次请求，
+        // 而「刚下载完」是确定改变了磁盘内容的事件，不该被吞。
+        if (download.localVersionsToken > 0) {
+            versions.reloadForced()
+        }
+    }
+
     // 版本抽屉是否展开。
     var showVersionDrawer by remember { mutableStateOf(false) }
 

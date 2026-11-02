@@ -329,7 +329,11 @@ class DownloadState internal constructor() {
                         lastDetail = "账号 ${ok.name} 刷新后 provider 变了：${ok.provider}"
                         continue
                     }
-                    return@withContext DownloadAccess.Allowed(ok.name ?: account.name ?: "玩家")
+                    // Account.name 是非空 String（上游字段声明就是 String），
+                    // 不需要 Elvis 兜底 —— 写了编译器会警告「左边恒非空」。
+                    // 也不能显示空串，用 isNotBlank 兜住上游可能给的空白名。
+                    val playerName = ok.name.takeIf { it.isNotBlank() } ?: "玩家"
+                    return@withContext DownloadAccess.Allowed(playerName)
                 }
 
                 is AuthPreflight.Result.NetworkFailure -> {
