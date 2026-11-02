@@ -65,6 +65,10 @@ mkdir -p "$RPM_STAGE/opt/${PKG_NAME}" \
 cp -r "$SRC_DIR/." "$RPM_STAGE/opt/${PKG_NAME}/"
 ln -sf "/opt/${PKG_NAME}/HMWLX" "$RPM_STAGE/usr/bin/${PKG_NAME}"
 
+# GPL-3.0 第 6 条：以目标码分发必须附带许可证全文。
+# /usr/share/doc/<pkg>/ 是 RPM 系的惯例位置。
+pack_install_legal "$RPM_STAGE/usr/share/doc/${PKG_NAME}"
+
 # 桌面项与 DEB 完全相同（Exec/Path/Icon 都对得上 /opt 布局）
 cat > "$RPM_STAGE/usr/share/applications/${PKG_NAME}.desktop" <<DESKTOP
 [Desktop Entry]
@@ -106,7 +110,7 @@ Name:           ${PKG_NAME}
 Version:        ${RPM_VERSION}
 Release:        1%{?dist}
 Summary:        ${DESCRIPTION}
-License:        Proprietary
+License:        GPL-3.0-only
 URL:            ${HOMEPAGE}
 BuildArch:      x86_64
 AutoReqProv:    no

@@ -89,6 +89,10 @@ mkdir -p "$APPDIR/usr/bin" \
 mkdir -p "$APPDIR/usr/bin/HMWLX"
 cp -r "$SRC_DIR/." "$APPDIR/usr/bin/HMWLX/"
 
+# GPL-3.0 第 6 条：AppImage 是分发物，必须带许可证全文。
+# 放 usr/share/doc/hmwlx/，和 DEB/RPM 布局一致。
+pack_install_legal "$APPDIR/usr/share/doc/${PKG_NAME}"
+
 # ------------------------------------------------------------ AppRun
 #
 # 用脚本而不是软链：APPDIR 是 AppImage 运行时注入的环境变量，

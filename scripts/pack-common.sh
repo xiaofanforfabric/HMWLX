@@ -115,3 +115,36 @@ pack_stage_clean() {
     rm -rf "$(pack_stage_base)"
     mkdir -p "$(pack_stage_base)"
 }
+
+# ---------------------------------------------------------------------------
+# 分发法律文件
+# ---------------------------------------------------------------------------
+#
+# GPL-3.0 第 6 条要求：以目标码形式分发时，必须附带许可证全文与版权声明。
+# 光把 LICENSE 放在 git 仓库里不算 —— 用户下载的是安装包，不是仓库。
+#
+# 所以每个安装包/便携包都要带上这两份：
+#   LICENSE                         本项目的 GPL-3.0 全文
+#   LEGAL/用户协议.txt               最终用户协议
+#   LEGAL/THIRD-PARTY-NOTICES.txt   headlessmc 的 MIT 声明（同样是硬性要求）
+#
+# 用法：pack_install_legal <目标目录> [目标目录...]
+#
+# 目标目录不存在会自动创建。缺文件直接报错 —— 宁可打包失败，
+# 也不要产出一个合规性残缺的安装包。
+pack_install_legal() {
+    local dest
+    local f
+
+    for dest in "$@"; do
+        mkdir -p "$dest"
+        for f in LICENSE "LEGAL/用户协议.txt" "LEGAL/THIRD-PARTY-NOTICES.txt"; do
+            if [[ ! -f "$_PACK_COMMON_ROOT/$f" ]]; then
+                echo "错误：缺少法律文件 $f（GPL-3.0 要求分发时附带）" >&2
+                return 1
+            fi
+            cp "$_PACK_COMMON_ROOT/$f" "$dest/"
+        done
+    done
+}
+

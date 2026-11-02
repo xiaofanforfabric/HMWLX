@@ -1,0 +1,80 @@
+HMWLX 第三方组件声明
+====================
+
+HMWLX 以 GNU General Public License v3.0（见 ../LICENSE）分发。
+
+本文件列出 HMWLX 分发物中包含的第三方作品。它们的许可证与本项目不同，
+分发时必须一并保留下述声明 —— 这不是可选的礼貌，是许可证的强制要求。
+
+
+--------------------------------------------------------------------------------
+headlessmc
+--------------------------------------------------------------------------------
+
+HMWLX 的核心功能依赖 headlessmc，其代码以 MIT 许可证分发：
+
+    MIT License
+
+    Copyright (c) headlessmc contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+上游项目地址：https://github.com/headlesshq/headlessmc
+本项目使用的构建版本：0df01d2043（经 JitPack 分发）
+
+
+--------------------------------------------------------------------------------
+关于许可证兼容性
+--------------------------------------------------------------------------------
+
+MIT 许可证允许被并入采用更严格许可证的作品中。因此 headlessmc 的代码可以在
+GPL-3.0 项目里使用并一同分发 —— 但 headlessmc 自身的 MIT 声明必须保留，
+不能因为整体改成了 GPL-3.0 就把它的版权信息抹掉。
+
+反过来不成立：本项目以 GPL-3.0 分发，任何基于本项目的衍生作品必须同样以
+GPL-3.0 开源，不能用 MIT 之类的宽松许可证重新分发。
+
+
+--------------------------------------------------------------------------------
+其他运行时依赖
+--------------------------------------------------------------------------------
+
+以下依赖通过 Gradle 在构建时引入，各自的许可证见其发行包内的声明：
+
+  - Kotlin / kotlinx-coroutines        Apache-2.0
+  - JetBrains Compose Multiplatform    Apache-2.0
+  - Quarkus                            Apache-2.0
+  - Skiko（Compose 的 Skia 绑定）       Apache-2.0
+  - SLF4J / Logback                     MIT / EPL-1.0
+
+这些许可证都与 GPL-3.0 兼容。
+
+完整依赖清单可用以下命令生成：
+
+    ./gradlew dependencies
+
+
+--------------------------------------------------------------------------------
+Minecraft
+--------------------------------------------------------------------------------
+
+本项目不是 Mojang 或 Microsoft 的官方产品，未获其批准或关联。
+
+Minecraft 是 Microsoft Corporation 及/或 Mojang Studios 的商标。
+使用本软件时你同样需要遵守 Minecraft 最终用户许可协议（EULA）。
