@@ -1,6 +1,9 @@
 package org.cn.xiaofan.ui.screen
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +18,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -34,6 +39,14 @@ import kotlinx.coroutines.launch
 import org.cn.xiaofan.dev.CliTerminalService
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+
+/**
+ * 终端字体色：荧光绿。
+ *
+ * <p>用纯 `#00FF00` 而不是主题里的绿：暗色底上的柔和绿（比如
+ * Material 的 secondary）会显得发灰，失去「老式终端」的辨识度。
+ */
+private val TerminalGreen = Color(0xFF00FF00)
 
 /**
  * 嘉豪终端。
@@ -112,18 +125,29 @@ fun CliTerminalScreen(
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
         // ---- 输出区 ----
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+        //
+        // 经典终端配色：纯黑底 + 荧光绿字。
+        // 不用主题色：终端是「老式 CRT」的视觉隐喻，跟着主题走反而失去识别度。
+        // 绿色用 #00FF00 而不是柔和色调 —— 暗色底上的柔和绿会显得发灰。
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(Color.Black)
+                .border(1.dp, Color(0xFF2A2A2A))
+                .padding(8.dp),
         ) {
-            itemsIndexed(lines) { _, line ->
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    // 等宽字体：CLI 输出里有对齐的表格和日志时间戳，
-                    // 比例字体读起来会错位。
-                    fontFamily = FontFamily.Monospace,
-                )
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(lines) { _, line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        // 等宽字体：CLI 输出里有对齐的表格和日志时间戳，
+                        // 比例字体读起来会错位。
+                        fontFamily = FontFamily.Monospace,
+                        color = TerminalGreen,
+                    )
+                }
             }
         }
 
@@ -138,15 +162,35 @@ fun CliTerminalScreen(
             )
         }
 
+        // 输入框也用同一套配色：黑底绿字之间嵌一个白色输入框会很跳。
         OutlinedTextField(
             value = input,
             onValueChange = { input = it },
             modifier = Modifier.fillMaxWidth(),
             enabled = running,
             singleLine = true,
-            placeholder = { Text(text(TextKey.CLI_TERMINAL_INPUT_HINT)) },
+            placeholder = {
+                Text(
+                    text = text(TextKey.CLI_TERMINAL_INPUT_HINT),
+                    // 占位符压暗一点，避免和真实输入混淆
+                    color = TerminalGreen.copy(alpha = 0.45f),
+                )
+            },
             textStyle = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = FontFamily.Monospace,
+                color = TerminalGreen,
+            ),
+            // 光标用绿色：默认光标在纯黑底上几乎看不见
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.Black,
+                unfocusedContainerColor = Color.Black,
+                disabledContainerColor = Color.Black,
+                focusedBorderColor = TerminalGreen.copy(alpha = 0.7f),
+                unfocusedBorderColor = Color(0xFF2A2A2A),
+                disabledBorderColor = Color(0xFF2A2A2A),
+                focusedTextColor = TerminalGreen,
+                unfocusedTextColor = TerminalGreen,
+                disabledTextColor = TerminalGreen.copy(alpha = 0.4f),
             ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(
