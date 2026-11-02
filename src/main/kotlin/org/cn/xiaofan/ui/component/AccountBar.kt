@@ -26,9 +26,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import org.cn.xiaofan.account.AccountProfile
 import org.cn.xiaofan.account.AvatarLoader
@@ -49,12 +52,15 @@ import org.cn.xiaofan.i18n.text
  * 是因为头像只有 36dp，单独点它太小，用户很容易点空。
  *
  * @param onOpenSwitch 点击账号栏时触发，由调用方切换到账号界面
+ * @param invalid 当前账号是否已确认失效（登录信息过期/被撤销）。
+ *   失效时头像变黑白、名字加红加删除线、并显示「已失效」标志。
  */
 @Composable
 fun AccountBar(
     profile: AccountProfile,
     modifier: Modifier = Modifier,
     onOpenSwitch: () -> Unit = {},
+    invalid: Boolean = false,
 ) {
     // key 必须与下面的 LaunchedEffect 完全一致，都用 avatarKey（provider + uuid）。
     // 不用 avatar 本身：离线账号的 BuiltInSkin.STEVE 是共用单例，「小凡」与「小明」
@@ -86,7 +92,7 @@ fun AccountBar(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AccountAvatar(profile = profile, avatar = avatar)
+            AccountAvatar(profile = profile, avatar = avatar, invalid = invalid)
 
             Spacer(Modifier.width(12.dp))
 
@@ -99,8 +105,23 @@ fun AccountBar(
                         text = profile.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        // 失效：红色 + 删除线。两者一起用而不是只用一样 ——
+                        // 只变色对色弱用户不友好，只加删除线容易被长名字分散注意。
+                        color = if (invalid) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        textDecoration = if (invalid) {
+                            TextDecoration.LineThrough
+                        } else {
+                            null
+                        },
                     )
                     SourceBadge(profile.sourceLabel())
+                    if (invalid) {
+                        InvalidBadge()
+                    }
                 }
             }
         }
@@ -109,9 +130,12 @@ fun AccountBar(
 
 /**
  * 头像：优先显示加载成功的皮肤头，否则用玩家名首字母占位。
+ *
+ * <p>`invalid` 时把头像去色：用 `ColorFilter.colorMatrix` 把饱和度降到 0。
+ * 不用直接叠一层灰色遮罩 —— 那样会把皮肤细节盖掉，看起来像加载失败。
  */
 @Composable
-private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?) {
+private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?, invalid: Boolean) {
     val size = 36.dp
     Box(
         modifier = Modifier
@@ -120,7 +144,11 @@ private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?) {
             .background(MaterialTheme.colorScheme.primaryContainer)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
+                color = if (invalid) {
+                    MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
                 shape = RoundedCornerShape(6.dp),
             ),
         contentAlignment = Alignment.Center,
@@ -132,6 +160,7 @@ private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?) {
                 modifier = Modifier.size(size),
                 // 像素画必须用最近邻，否则会糊
                 filterQuality = FilterQuality.None,
+                colorFilter = if (invalid) GrayscaleFilter else null,
             )
         } else {
             Text(
@@ -141,6 +170,32 @@ private fun AccountAvatar(profile: AccountProfile, avatar: ImageBitmap?) {
                 fontWeight = FontWeight.Bold,
             )
         }
+    }
+}
+
+/**
+ * 去色滤镜：饱和度降为 0。
+ *
+ * <p>矩阵是标准的 luminance 权重（人眼对绿色最敏感），
+ * 不是简单的平均值 —— 用平均值会让红/蓝色头像偏暗。
+ */
+private val GrayscaleFilter = ColorFilter.colorMatrix(
+    ColorMatrix().apply { setToSaturation(0f) },
+)
+
+/** 「已失效」标志。用错误色而不是灰色：这是需要用户处理的状态，不是普通信息。 */
+@Composable
+private fun InvalidBadge() {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Text(
+            text = text(TextKey.ACCOUNT_INVALID_BADGE),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
     }
 }
 

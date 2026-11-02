@@ -51,6 +51,7 @@ import org.cn.xiaofan.account.AuthPreflight
 import org.cn.xiaofan.account.blocksLaunch
 import org.cn.xiaofan.account.shouldWarn
 import org.cn.xiaofan.account.sourceLabel
+import org.cn.xiaofan.account.rememberAccountValidityState
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
 import org.cn.xiaofan.config.AppConfig
 import org.cn.xiaofan.download.rememberDownloadState
@@ -129,6 +130,19 @@ fun HmwLxApp() {
     // 下载中心的准入状态。同样提到这一层：用户可能来回切页面，
     // 放在页面内部的话每次进来都会重新校验一遍（要发两次 HTTP 请求）。
     val download = rememberDownloadState()
+
+    // 账号有效性状态：用来把失效账号的头像标灰、名字加删除线。
+    // 提到这一层是因为账号栏是全局的，而校验结果要跨页面保持。
+    val accountValidity = rememberAccountValidityState(launchScope)
+
+    // 容器就绪后校验一次。放在 Ready 之后而不是启动处：
+    // 容器没起来时取不到 AuthService，校验必然失败。
+    val bootReady = state as? BootState.Ready
+    LaunchedEffect(bootReady != null) {
+        if (bootReady != null) {
+            accountValidity.refresh()
+        }
+    }
 
     // 下载装完一个版本后，让版本列表重扫一遍磁盘 ——
     // 否则首页的启动按钮/版本抽屉还是旧的，用户刚下完却看不到。
@@ -318,6 +332,7 @@ fun HmwLxApp() {
                         AccountBar(
                             profile = ready.account,
                             onOpenSwitch = { showAccountSwitch = true },
+                            invalid = accountValidity.isInvalid(ready.account),
                         )
                     }
 

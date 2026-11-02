@@ -34,6 +34,14 @@ object TextKey {
     /** 玩家头像的描述。`{0}` 为玩家名。 */
     const val ACCOUNT_AVATAR_DESCRIPTION = "account.avatar.description"
 
+    /**
+     * 账号失效标志。
+     *
+     * <p>显示在账号栏上，表示这个账号的登录信息已过期或被撤销，
+     * 需要重新登录才能继续用。
+     */
+    const val ACCOUNT_INVALID_BADGE = "account.invalid.badge"
+
     // --- 账号切换 ---
 
     /** 账号切换界面标题。 */
