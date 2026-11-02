@@ -1,25 +1,53 @@
 package org.cn.xiaofan.ui.screen
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.cn.xiaofan.download.DownloadAccess
 import org.cn.xiaofan.download.DownloadState
+import org.cn.xiaofan.download.MinecraftDownloadService
+import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * 下载中心。
@@ -58,6 +86,10 @@ fun DownloadCenterScreen(
         state.runCheck()
     }
 
+    // 下载和重新拉清单都用这个 scope：页面切走时协程自动取消，
+    // 不会出现「用户已经去了别的页面，下载结果才弹出来」。
+    val scope = rememberCoroutineScope()
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -65,7 +97,7 @@ fun DownloadCenterScreen(
         when (val access = state.access) {
             is DownloadAccess.Checking -> CheckingView()
 
-            is DownloadAccess.Allowed -> AllowedView(access)
+            is DownloadAccess.Allowed -> AllowedView(access, state, scope)
 
             is DownloadAccess.Denied -> DeniedView(state)
         }
@@ -135,33 +167,361 @@ private fun DeniedView(state: DownloadState) {
 }
 
 /**
- * 放行页。
+ * 放行页：版本列表 + 下载。
  *
- * <p>目前只显示「以谁的身份下载」。真正的版本列表与下载逻辑是下一步的事，
- * 这里先把准入链路跑通 —— 准入没做对就做下载，等于给所有人开门。
+ * <p>只有通过微软正版校验的用户能看到这里 —— 版本清单本身就是受
+ * EULA 保护的数据，不能提前拉好等着。
+ *
+ * <p>清单在进入本页时才拉（`LaunchedEffect(Unit)`），而不是在
+ * [DownloadCenterScreen] 顶层：拒绝态不该产生任何下载相关的网络请求。
  */
 @Composable
-private fun AllowedView(access: DownloadAccess.Allowed) {
-    Box(
+private fun AllowedView(
+    access: DownloadAccess.Allowed,
+    state: DownloadState,
+    scope: CoroutineScope,
+) {
+    // 进入放行页才拉清单。key 用 Unit 是安全的：
+    // 这个 composable 只在 access 变成 Allowed 后进入组合，
+    // 而 loadVersions() 内部对 Loading 态有幂等保护。
+    LaunchedEffect(Unit) {
+        state.loadVersions()
+    }
+
+    Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
-        contentAlignment = Alignment.TopStart,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                text = text(TextKey.DOWNLOAD_TITLE),
-                style = MaterialTheme.typography.headlineSmall,
+        Text(
+            text = text(TextKey.DOWNLOAD_TITLE),
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        // 显示账号名，让用户能确认用的是哪个账号下载的。
+        Text(
+            text = Messages.get(TextKey.DOWNLOAD_ALLOWED_AS, access.playerName),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+
+        // 下载中 / 下载结果提示
+        val installing = state.installing
+        val outcome = state.installResult
+        when {
+            installing != null -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                Text(
+                    text = Messages.get(TextKey.DOWNLOAD_INSTALLING, installing.versionId) +
+                        "  " + installing.stage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            outcome is DownloadState.InstallOutcome.Success -> ResultBanner(
+                text = Messages.get(TextKey.DOWNLOAD_INSTALL_OK, outcome.versionId),
+                isError = false,
+                onDismiss = { state.dismissInstallResult() },
             )
-            // 显示账号名，让用户能确认用的是哪个账号下载的。
-            Text(
-                text = "已通过微软正版账号校验：${access.playerName}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
+
+            outcome is DownloadState.InstallOutcome.Failed -> ResultBanner(
+                text = Messages.get(
+                    TextKey.DOWNLOAD_INSTALL_FAILED,
+                    outcome.versionId,
+                    outcome.reason,
+                ),
+                isError = true,
+                onDismiss = { state.dismissInstallResult() },
             )
-            Text(
-                text = "版本列表与下载功能待接入。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        }
+
+        HorizontalDivider()
+
+        // 版本列表
+        //
+        // 列表区必须用 weight(1f)，不能用 fillMaxSize()：
+        // 在 Column 里 fillMaxSize() 会先按父约束的最大高度占位，
+        // 但 Column 的其它子项（标题、页签、提示条）已经吃掉了一部分，
+        // 结果列表区拿到的高度算成 0 —— 加载失败时那句提示和
+        // 「重新获取」按钮会被压成不可见、点不到。
+        // weight(1f) 让 Column 把**剩余**高度分给它，这才是想要的。
+        when (val list = state.listState) {
+            is DownloadState.VersionListUi.Idle,
+            is DownloadState.VersionListUi.Loading -> Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        text = text(TextKey.DOWNLOAD_LIST_LOADING),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            is DownloadState.VersionListUi.Failed -> Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = Messages.get(TextKey.DOWNLOAD_LIST_FAILED, list.reason),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.widthIn(max = 560.dp),
+                    )
+                    OutlinedButton(onClick = { scope.launch { state.loadVersions() } }) {
+                        Text(text(TextKey.DOWNLOAD_RELOAD_LIST))
+                    }
+                }
+            }
+
+            is DownloadState.VersionListUi.Loaded -> {
+                // 页签选中项记在页面里而不是 DownloadState：它纯属展示状态，
+                // 用户切走再回来该回到默认的「正式版」，而不是停在上次看的分类。
+                var tab by remember {
+                    mutableStateOf(MinecraftDownloadService.VersionCategory.RELEASE)
+                }
+
+                CategoryTabs(
+                    selected = tab,
+                    all = list.versions,
+                    onSelect = { tab = it },
+                )
+
+                // ALL 表示不过滤；其余按分类筛。
+                val shown = if (tab == MinecraftDownloadService.VersionCategory.ALL) {
+                    list.versions
+                } else {
+                    list.versions.filter { it.category == tab }
+                }
+
+                if (shown.isEmpty()) {
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = text(TextKey.DOWNLOAD_TAB_EMPTY),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    // weight 必须加在这里：DownloadableVersionList 是独立函数，
+                    // 函数体内部没有 ColumnScope，写 Modifier.weight 会编译不过。
+                    // 用 Box 承接权重、内部列表填满它，职责清楚。
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        DownloadableVersionList(
+                            versions = shown,
+                            installingId = installing?.versionId,
+                            enabled = installing == null,
+                            onInstall = { version ->
+                                scope.launch { state.install(version.id) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 分类页签。
+ *
+ * <p>五个页签：全部 / 正式版 / 快照版 / 愚人节版 / 远古版。
+ * 默认选中正式版 —— 绝大多数用户要的就是这个，不该让他们先点一下。
+ *
+ * <p>每个页签后面带数量：用户能一眼看出「愚人节版只有 8 个」，
+ * 不至于以为列表坏了。
+ */
+@Composable
+private fun CategoryTabs(
+    selected: MinecraftDownloadService.VersionCategory,
+    all: List<MinecraftDownloadService.DownloadableVersion>,
+    onSelect: (MinecraftDownloadService.VersionCategory) -> Unit,
+) {
+    // 显示顺序：默认的正式版排第一，然后是常用的快照版，
+    // 愚人节/远古这种小众的往后放，「全部」放最后（它是兜底而不是首选）。
+    val tabs = listOf(
+        MinecraftDownloadService.VersionCategory.RELEASE to TextKey.DOWNLOAD_TAB_RELEASE,
+        MinecraftDownloadService.VersionCategory.SNAPSHOT to TextKey.DOWNLOAD_TAB_SNAPSHOT,
+        MinecraftDownloadService.VersionCategory.APRIL_FOOLS to TextKey.DOWNLOAD_TAB_APRIL_FOOLS,
+        MinecraftDownloadService.VersionCategory.LEGACY to TextKey.DOWNLOAD_TAB_LEGACY,
+        MinecraftDownloadService.VersionCategory.ALL to TextKey.DOWNLOAD_TAB_ALL,
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tabs.forEach { (category, labelKey) ->
+            val count = if (category == MinecraftDownloadService.VersionCategory.ALL) {
+                all.size
+            } else {
+                all.count { it.category == category }
+            }
+            val isSelected = selected == category
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                } else {
+                    Color.Transparent
+                },
+                modifier = Modifier.clickable { onSelect(category) },
+            ) {
+                Text(
+                    text = "${text(labelKey)} ($count)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 版本列表。
+ *
+ * <p>用 LazyColumn 而不是普通 Column：官方版本有几百个，
+ * 一次性全部组合出来会明显卡顿。
+ */
+@Composable
+private fun DownloadableVersionList(
+    versions: List<MinecraftDownloadService.DownloadableVersion>,
+    installingId: String?,
+    enabled: Boolean,
+    onInstall: (MinecraftDownloadService.DownloadableVersion) -> Unit,
+) {
+    LazyColumn(
+        // 这里用 fillMaxSize 而不是 weight：外层已经由 Box 接住了
+        // Column 的剩余高度，本函数内部没有 ColumnScope。
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        items(versions, key = { it.id }) { version ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                VersionIcon(version.category)
+                Text(
+                    text = version.id,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.width(180.dp),
+                )
+                Text(
+                    text = version.type,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                // 正在下载的那个显示进度，其余显示按钮。
+                // 同时只允许一个下载：并发写同一个游戏目录会互相覆盖。
+                if (installingId == version.id) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                } else {
+                    TextButton(
+                        onClick = { onInstall(version) },
+                        enabled = enabled,
+                    ) {
+                        Text(text(TextKey.DOWNLOAD_ACTION))
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+/**
+ * 版本图标。
+ *
+ * <p>按分类取图：正式版草方块 / 快照版 / 愚人节版 / 远古版。
+ * 「全部」页签里也会显示每行自己的分类图标 —— 分类图标反映的是
+ * **这个版本是什么**，不是**当前在看哪个页签**。
+ *
+ * <p>走 ClassLoader 读 classpath 资源，与 `VersionListScreen.VersionLogo` 一致：
+ * 项目没启用 Compose Resources 代码生成，`painterResource` 用不了。
+ */
+@Composable
+private fun VersionIcon(category: MinecraftDownloadService.VersionCategory) {
+    val resource = when (category) {
+        MinecraftDownloadService.VersionCategory.RELEASE -> "/images/icon-release.png"
+        MinecraftDownloadService.VersionCategory.SNAPSHOT -> "/images/icon-snapshot.png"
+        MinecraftDownloadService.VersionCategory.APRIL_FOOLS -> "/images/icon-aprilfools.png"
+        MinecraftDownloadService.VersionCategory.LEGACY -> "/images/icon-old.png"
+        // ALL 不该出现在单个版本上，但枚举必须穷尽。
+        MinecraftDownloadService.VersionCategory.ALL -> "/images/icon-old.png"
+    }
+
+    var bitmap by remember(resource) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(resource) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                DownloadCenterLogo.javaClass
+                    .getResourceAsStream(resource)
+                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
+            }.getOrNull()
+        }
+    }
+
+    val image = bitmap ?: return
+
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        filterQuality = FilterQuality.High,
+        // 源图 128~512px，缩到 32dp 仍要开高质量过滤，否则纹理糊成噪点。
+        modifier = Modifier.size(32.dp),
+    )
+}
+
+/** 只为拿到 classloader 而存在的锚点。 */
+private object DownloadCenterLogo
+
+/** 结果提示条。 */
+@Composable
+private fun ResultBanner(    text: String,
+    isError: Boolean,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isError) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onDismiss) {
+            Text(text(TextKey.DOWNLOAD_DISMISS))
         }
     }
 }

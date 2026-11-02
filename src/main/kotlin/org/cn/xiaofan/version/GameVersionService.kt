@@ -38,8 +38,28 @@ object GameVersionService {
     /** 兜底游戏目录名，与官方启动器一致。 */
     private const val FALLBACK_DIR_NAME = ".minecraft"
 
-    /** headlessmc 配置里游戏目录的 key。 */
-    private const val KEY_GAME_DIR = "hmc.gamedir"
+    /**
+     * headlessmc 配置文件里游戏目录的键，**按优先级排列**。
+     *
+     * <p>这些名字是照着上游 `FileConfig` / `DefaultMcFiles.computeMcDir()` 抄的：
+     *
+     * ```java
+     * Optional<String> legacy = config.getOptionalValue("hmc.mcdir", String.class);
+     * config.property(config.mcDir(), legacy, ...)   // mcDir 就是 hmc.files.mc
+     * ```
+     *
+     * <p>**曾经这里写的是 `hmc.gamedir` —— 那是错的**，headlessmc 从来
+     * 不认这个键。后果是：用户在 headlessmc 里配了自定义 mcdir，
+     * 我们却仍按 `~/.minecraft` 算，于是下载装到 A、启动去 B 找，
+     * 表现就是「装完提示成功，版本列表里却没有」。
+     *
+     * <p>顺序：新键 `hmc.files.mc` 优先，旧键 `hmc.mcdir` 兜底 ——
+     * 与上游 `property(new, legacy, ...)` 的语义一致。
+     */
+    private val GAME_DIR_KEYS = listOf("hmc.files.mc", "hmc.mcdir")
+
+    /** 便于测试与临时覆盖的系统属性名（我们自己加的，不来自上游）。 */
+    private const val KEY_GAME_DIR_OVERRIDE = "hmc.gamedir"
 
     /**
      * 扫描当前游戏目录。
@@ -59,37 +79,72 @@ object GameVersionService {
     /**
      * 解析游戏目录。
      *
+     * <p>**必须与 headlessmc 自己的 `DefaultMcFiles.computeMcDir()` 得出同一个结果。**
+     * 启动链路（`LaunchController` 构造 Profile）和下载安装用的是这一个函数，
+     * 只要它跟 headlessmc 不一致，就会出现「装到 A、启动去 B 找」。
+     *
      * <p>顺序：
-     * 1. 系统属性 `hmc.gamedir` —— 便于测试与临时覆盖，与 `AccountResolver` 读配置的方式一致
-     * 2. headlessmc 的配置文件里同名项
-     * 3. `~/.minecraft`
+     * 1. 系统属性 `hmc.gamedir` —— 仅用于测试/临时覆盖，上游不认这个键
+     * 2. 配置文件里的 `hmc.files.mc`，其次 `hmc.mcdir`
+     * 3. 默认：Windows 是 `%APPDATA%\.minecraft`，macOS 是
+     *    `~/Library/Application Support/minecraft`，其它是 `~/.minecraft`
+     *    （与上游 `computeMcDir` 的三个分支一一对应）
      *
      * <p>第 1、2 步都失败不应该让整个扫描失败：绝大多数用户就是默认目录，
      * 找不到配置说明还没改过，直接用默认值才是对的。
      *
-     * <p>注意 `hmc.gamedir` 配了但目录不在时**不报错**，当作「还没配」处理 ——
+     * <p>注意配置了但目录不存在时**不报错**，当作「还没配」处理 ——
      * 用户可能是换了个盘、还没把游戏搬过来，这时候直接给「目录不存在」的错误
      * 反而挡住了他去看默认目录里装了什么。
      *
-     * <p>**不直接注入 headlessmc 的 `GameDirConfig`**：它在不同版本里换过类型
-     * （`File` / `Path` / `Holder<…>`），按类型查 bean 很容易在升级后失效。
-     * 读配置文件里的同一个键更稳，代价只是多解析一个 properties 文件。
-     * TODO(human): 如果 headlessmc 后续提供了稳定的 gamedir 查询接口，换掉这段文件解析。
+     * <p>**不直接注入 headlessmc 的 `McFiles` bean**：它在不同版本里换过类型，
+     * 而且 `getMcDir()` 可能触发配置绑定失败。读配置文件里的同一批键更稳，
+     * 代价只是多解析一个 properties 文件。
+     * TODO(human): 如果上游提供了稳定的目录查询接口，换掉这段文件解析。
      */
     suspend fun resolveGameDir(): File {
         val configured = configuredGameDir()
         if (configured != null) return configured
 
-        val home = System.getProperty("user.home") ?: error("拿不到 user.home")
-        return File(home, FALLBACK_DIR_NAME)
+        return defaultGameDir()
     }
 
-    /** 从系统属性 / headlessmc 配置读 `hmc.gamedir`，没配或配了个不存在的路径就当没配。 */
+    /** 按 headlessmc `computeMcDir()` 的规则算默认目录。 */
+    private fun defaultGameDir(): File {
+        val os = System.getProperty("os.name").orEmpty().lowercase()
+
+        if (os.contains("win")) {
+            val appData = System.getenv("APPDATA")
+            if (!appData.isNullOrBlank()) {
+                // 与上游一致：Windows 下是 %APPDATA%\.minecraft
+                return File(appData, FALLBACK_DIR_NAME)
+            }
+        }
+
+        val home = File(System.getProperty("user.home") ?: error("拿不到 user.home"))
+        return if (os.contains("mac")) {
+            File(home, "Library/Application Support/minecraft")
+        } else {
+            File(home, FALLBACK_DIR_NAME)
+        }
+    }
+
+    /**
+     * 从系统属性 / headlessmc 配置读游戏目录。
+     *
+     * <p>返回值会做「目录必须存在」的校验：配了一个不存在的路径时当作没配，
+     * 这样用户换盘中途也能正常看到默认目录里的内容。
+     */
     private fun configuredGameDir(): File? {
-        val raw = System.getProperty(KEY_GAME_DIR)?.takeIf { it.isNotBlank() }
-            ?: readHeadlessMcConfig(KEY_GAME_DIR)
-            ?: return null
-        return File(raw).takeIf { it.isDirectory }
+        System.getProperty(KEY_GAME_DIR_OVERRIDE)?.takeIf { it.isNotBlank() }
+            ?.let { return File(it).takeIf { dir -> dir.isDirectory } }
+
+        for (key in GAME_DIR_KEYS) {
+            val raw = readHeadlessMcConfig(key)?.takeIf { it.isNotBlank() } ?: continue
+            val dir = File(raw).takeIf { it.isDirectory }
+            if (dir != null) return dir
+        }
+        return null
     }
 
     /**

@@ -113,6 +113,133 @@ class DownloadState internal constructor() {
         checkToken++
     }
 
+    // ------------------------------------------------------------------
+    // 版本列表与下载
+    // ------------------------------------------------------------------
+
+    /**
+     * 版本列表的加载状态。
+     *
+     * <p>只在 [DownloadAccess.Allowed] 之后才有意义：拒绝态不该去拉清单，
+     * 那是把受 EULA 保护的数据提前准备好，等于变相提供下载。
+     */
+    var listState by mutableStateOf<VersionListUi>(VersionListUi.Idle)
+        private set
+
+    /** 版本清单加载状态。 */
+    sealed interface VersionListUi {
+        /** 还没开始拉。 */
+        data object Idle : VersionListUi
+
+        /** 正在拉取清单。 */
+        data object Loading : VersionListUi
+
+        /** 拉到了。 */
+        data class Loaded(
+            val versions: List<MinecraftDownloadService.DownloadableVersion>,
+        ) : VersionListUi
+
+        /** 拉失败。`reason` 可直接展示。 */
+        data class Failed(val reason: String) : VersionListUi
+    }
+
+    /**
+     * 某个版本的下载进度。
+     *
+     * <p>同时只允许一个版本在下载：并发下载会争抢同一个游戏目录，
+     * 装出来的目录结构可能互相覆盖。上游的安装器也不是为并发设计的。
+     */
+    var installing by mutableStateOf<InstallingUi?>(null)
+        private set
+
+    /** 下载中状态。 */
+    data class InstallingUi(
+        /** 正在下载的版本号。 */
+        val versionId: String,
+        /** 当前阶段描述，来自上游的进度回调。 */
+        val stage: String,
+    )
+
+    /** 最近一次下载的结果。成功/失败都放这里，界面展示后由用户关闭。 */
+    var installResult by mutableStateOf<InstallOutcome?>(null)
+        private set
+
+    /** 下载结果提示。 */
+    sealed interface InstallOutcome {
+        data class Success(val versionId: String) : InstallOutcome
+        data class Failed(val versionId: String, val reason: String) : InstallOutcome
+    }
+
+    /** 关闭结果提示。 */
+    fun dismissInstallResult() {
+        installResult = null
+    }
+
+    /**
+     * 本地已安装版本需要重扫的信号。
+     *
+     * <p>界面订阅它来决定何时调 `VersionState.reload()`。不直接持有
+     * `VersionState` 是因为那会让下载模块依赖版本模块，而版本模块
+     * 是纯读磁盘、不依赖容器的，不该被下载功能带脏。
+     */
+    var localVersionsToken by mutableStateOf(0)
+        private set
+
+    /**
+     * 拉取版本清单。
+     *
+     * <p>只有放行态才拉：拒绝态拉清单等于把受保护的数据提前准备好。
+     * 重复调用时若已在加载则忽略，避免连点触发多次请求。
+     */
+    suspend fun loadVersions() {
+        if (access !is DownloadAccess.Allowed) return
+        if (listState is VersionListUi.Loading) return
+
+        listState = VersionListUi.Loading
+        listState = when (val result = MinecraftDownloadService.listVersions()) {
+            is MinecraftDownloadService.VersionListResult.Success ->
+                VersionListUi.Loaded(result.versions)
+
+            is MinecraftDownloadService.VersionListResult.Failed ->
+                VersionListUi.Failed(result.reason)
+        }
+    }
+
+    /**
+     * 下载并安装一个版本。
+     *
+     * <p>**只有 [MinecraftDownloadService.install] 确认版本真的落到磁盘上
+     * （它内部会重扫本地版本）**，这里才推进 [localVersionsToken]。
+     * 否则会出现「界面提示安装完成，版本列表里却没有」—— 比直接报错更让人困惑。
+     *
+     * <p>同样只允许放行态调用 —— 这是最后一道闸，界面层不该是唯一的守卫。
+     */
+    suspend fun install(versionId: String) {
+        if (access !is DownloadAccess.Allowed) return
+        if (installing != null) return
+
+        installing = InstallingUi(versionId = versionId, stage = "准备中…")
+        installResult = null
+
+        val result = MinecraftDownloadService.install(versionId) { stage ->
+            // 进度回调在 IO 线程上触发，写 Compose 状态是线程安全的
+            // （mutableStateOf 的写入会被转发到主线程的快照系统）。
+            installing = installing?.copy(stage = stage)
+        }
+
+        installing = null
+        installResult = when (result) {
+            is MinecraftDownloadService.InstallResult.Success -> {
+                // 装完了，让版本列表重新扫一遍磁盘。
+                localVersionsToken++
+                InstallOutcome.Success(result.versionId)
+            }
+
+            is MinecraftDownloadService.InstallResult.Failed ->
+                InstallOutcome.Failed(versionId, result.reason)
+        }
+    }
+
     /**
      * 执行一次校验。由页面在 `LaunchedEffect(token)` 里调用。
      *
@@ -202,7 +329,11 @@ class DownloadState internal constructor() {
                         lastDetail = "账号 ${ok.name} 刷新后 provider 变了：${ok.provider}"
                         continue
                     }
-                    return@withContext DownloadAccess.Allowed(ok.name ?: account.name ?: "玩家")
+                    // Account.name 是非空 String（上游字段声明就是 String），
+                    // 不需要 Elvis 兜底 —— 写了编译器会警告「左边恒非空」。
+                    // 也不能显示空串，用 isNotBlank 兜住上游可能给的空白名。
+                    val playerName = ok.name.takeIf { it.isNotBlank() } ?: "玩家"
+                    return@withContext DownloadAccess.Allowed(playerName)
                 }
 
                 is AuthPreflight.Result.NetworkFailure -> {

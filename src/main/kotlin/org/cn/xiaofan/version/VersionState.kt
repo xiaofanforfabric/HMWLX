@@ -53,6 +53,18 @@ class VersionState internal constructor() {
         if (!loading) reloadToken++
     }
 
+    /**
+     * 强制重新扫描，**不管当前是否正在扫**。
+     *
+     * <p>与 [reload] 的区别：那个是用户点「刷新」用的，连点应该被吞掉；
+     * 这个是「外部发生了确定会改变磁盘内容的事件」用的（比如刚下载完一个版本）。
+     * 那种情况如果正巧赶上一次进行中的扫描，被吞掉就意味着新版本要等下次
+     * 手动刷新才出现 —— 用户刚看到「安装完成」，转头列表里没有，体验很差。
+     */
+    fun reloadForced() {
+        reloadToken++
+    }
+
     /** 选中一个版本。 */
     fun select(version: GameVersion) {
         selected = version

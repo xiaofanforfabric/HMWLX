@@ -206,6 +206,55 @@ object TextKey {
     /** 正在校验账号时的提示。 */
     const val DOWNLOAD_CHECKING = "download.checking"
 
+    // --- 版本列表与下载 ---
+
+    /** 版本清单加载中。 */
+    const val DOWNLOAD_LIST_LOADING = "download.list.loading"
+
+    /** 版本清单加载失败。`{0}` 为原因。 */
+    const val DOWNLOAD_LIST_FAILED = "download.list.failed"
+
+    /** 已通过校验，显示账号名。`{0}` 为玩家名。 */
+    const val DOWNLOAD_ALLOWED_AS = "download.allowed.as"
+
+    /** 下载按钮。 */
+    const val DOWNLOAD_ACTION = "download.action"
+
+    /** 下载中。`{0}` 为版本号。 */
+    const val DOWNLOAD_INSTALLING = "download.installing"
+
+    /** 下载成功。`{0}` 为版本号。 */
+    const val DOWNLOAD_INSTALL_OK = "download.install.ok"
+
+    /** 下载失败。`{0}` 为版本号，`{1}` 为原因。 */
+    const val DOWNLOAD_INSTALL_FAILED = "download.install.failed"
+
+    /** 关闭提示。 */
+    const val DOWNLOAD_DISMISS = "download.dismiss"
+
+    /** 重新拉取版本清单。 */
+    const val DOWNLOAD_RELOAD_LIST = "download.reload.list"
+
+    // --- 版本分类页签 ---
+
+    /** 页签：全部。 */
+    const val DOWNLOAD_TAB_ALL = "download.tab.all"
+
+    /** 页签：正式版。 */
+    const val DOWNLOAD_TAB_RELEASE = "download.tab.release"
+
+    /** 页签：快照版。 */
+    const val DOWNLOAD_TAB_SNAPSHOT = "download.tab.snapshot"
+
+    /** 页签：愚人节版。 */
+    const val DOWNLOAD_TAB_APRIL_FOOLS = "download.tab.april.fools"
+
+    /** 页签：远古版。 */
+    const val DOWNLOAD_TAB_LEGACY = "download.tab.legacy"
+
+    /** 当前分类下没有版本。 */
+    const val DOWNLOAD_TAB_EMPTY = "download.tab.empty"
+
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"
 
