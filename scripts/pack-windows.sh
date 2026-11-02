@@ -222,6 +222,10 @@ if [[ "$WANT_ZIP" == "true" ]]; then
   cp build/launcher/HMWLX.exe "$ZIP_STAGE/"
   cp "$STAGE_DIR/hmwlx.jar" "$ZIP_STAGE/"
   cp -r "$STAGE_DIR/runtime" "$ZIP_STAGE/"
+  # GPL-3.0 第 6 条：ZIP 也是分发物，必须带许可证全文
+  cp "$ROOT/LICENSE" "$ZIP_STAGE/"
+  cp "$ROOT/LEGAL/用户协议.txt" "$ZIP_STAGE/"
+  cp "$ROOT/LEGAL/THIRD-PARTY-NOTICES.txt" "$ZIP_STAGE/"
   chmod -R a+rX build/win-zip
   rm -f "$ZIP_OUT"
   (cd build/win-zip && zip -qr9 "$ROOT/$ZIP_OUT" "HMWLX")

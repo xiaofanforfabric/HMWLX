@@ -163,11 +163,39 @@ tasks.register('fatJar', Jar) {
             'Main-Class': 'org.cn.xiaofan.MainKt',
             'Implementation-Title': 'HMWLX',
             'Implementation-Version': project.version,
+            // GPL-3.0 要求分发时能看出许可证。写进 Manifest 后
+            // 用 unzip -p hmwlx.jar META-INF/MANIFEST.MF 就能查到，
+            // 不必依赖安装包里有没有被漏拷的 LICENSE 文件。
+            'Implementation-Vendor': 'xiaofan',
+            'License': 'GPL-3.0-only',
         )
     }
 
     // 1. 我们的类与资源
     from sourceSets.main.output
+
+    // 1.5 法律文件进 jar 的 META-INF。
+    //
+    // 打包脚本会把 LICENSE 拷到安装包里，但那是「外层」保障：用户可能
+    // 只拿到一个 hmwlx.jar（比如从别的发行版里抠出来），这时 jar 自带的
+    // 许可证就是唯一的举证。GPL-3.0 第 6 条要求目标码分发附带许可证全文。
+    //
+    // 文件名必须避开依赖里已有的 META-INF/LICENSE、NOTICE ——
+    // duplicatesStrategy = EXCLUDE 遇到重名是静默丢弃，不报错，
+    // 结果就是「加了但没进 jar」，排查起来很费时间。
+    // 用 HMWLX- 前缀保证唯一。
+    from(layout.projectDirectory.file('LICENSE')) {
+        into 'META-INF'
+        rename { 'HMWLX-LICENSE-GPL-3.0.txt' }
+    }
+    from(layout.projectDirectory.file('LEGAL/THIRD-PARTY-NOTICES.txt')) {
+        into 'META-INF'
+        rename { 'HMWLX-THIRD-PARTY-NOTICES.txt' }
+    }
+    from(layout.projectDirectory.file('LEGAL/用户协议.txt')) {
+        into 'META-INF'
+        rename { 'HMWLX-EULA-zh-CN.txt' }
+    }
 
     // 2. Quarkus 生成的两个增强 jar，必须排在前面
     from(zipTree(layout.buildDirectory.file('quarkus-app/quarkus/transformed-bytecode.jar')))

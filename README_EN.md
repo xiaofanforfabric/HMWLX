@@ -135,4 +135,22 @@ Please read the [EULA](LEGAL/用户协议.txt) before use.
 
 ---
 
+## License
+
+HMWLX is released under the **GNU General Public License v3.0** — see [LICENSE](LICENSE).
+
+In short:
+
+- ✅ Free to use, modify and distribute
+- ✅ Commercial use allowed
+- ⚠️ **Derivative works must also be open-sourced under GPL-3.0** — you cannot
+  modify it and ship a closed-source build
+- ⚠️ Keep the copyright notice and include the full license text when distributing
+- ❌ No warranty of any kind
+
+The underlying headlessmc is licensed under MIT; its notice is preserved in
+[LEGAL/THIRD-PARTY-NOTICES.txt](LEGAL/THIRD-PARTY-NOTICES.txt).
+
+---
+
 [简体中文](README.md)

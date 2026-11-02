@@ -1,3 +1,23 @@
+/*
+ * HMWLX - Hello My World Launcher X
+ * Copyright (C) 2026 xiaofan
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+
 package org.cn.xiaofan.legal
 
 /**
@@ -104,8 +124,13 @@ object UserAgreement {
                     "一切后果，由用户自行承担。",
                 "6.3  在适用法律允许的最大范围内，HMWLX 及其开发者不对任何直接、间接、偶然、特殊" +
                     "或后果性损害承担责任，包括但不限于数据丢失、设备损坏、账号封禁、利润损失。",
-                "6.4  本软件为开源软件，按开源许可证的条款分发。开源许可证中关于免责的条款同样" +
+                "6.4  本软件为开源软件，以 GNU 通用公共许可证第 3 版（GPL-3.0）分发，" +
+                    "许可证全文见随附的 LICENSE 文件。开源许可证中关于免责的条款同样" +
                     "适用于本软件。",
+                "6.5  您依据 GPL-3.0 所享有的复制、修改、分发等权利不受本协议限制。" +
+                    "本协议仅就使用本软件过程中的账号、下载源等事项作出约定，不构成" +
+                    "对 GPL-3.0 所授予权利的任何削减。二者冲突时，就软件分发相关事宜" +
+                    "以 GPL-3.0 为准。",
             ),
         ),
         Section(

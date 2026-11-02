@@ -55,6 +55,16 @@ mkdir -p "$DEB_ROOT/DEBIAN" \
 # ------------------------------------------------------------ 程序本体
 cp -r "$SRC_DIR/." "$DEB_ROOT/opt/${PKG_NAME}/"
 
+# 目录版把法律文件放在包根目录，cp -r 会一起带进 /opt。
+# 剔除，只保留 /usr/share/doc 那份（理由见 pack-common.sh）。
+pack_prune_legal "$DEB_ROOT/opt/${PKG_NAME}"
+
+# ------------------------------------------------------------ 法律文件
+#
+# GPL-3.0 第 6 条：以目标码分发必须附带许可证全文与版权声明。
+# 装到 /usr/share/doc/<pkg>/ 是 Debian 的惯例位置。
+pack_install_legal "$DEB_ROOT/usr/share/doc/${PKG_NAME}"
+
 # ------------------------------------------------------------ 命令行入口
 ln -sf "/opt/${PKG_NAME}/HMWLX" "$DEB_ROOT/usr/bin/${PKG_NAME}"
 
@@ -124,6 +134,7 @@ Installed-Size: ${INSTALLED_SIZE}
 Depends: libx11-6, libfontconfig1, libfreetype6, libgl1
 Maintainer: ${MAINTAINER}
 Homepage: ${HOMEPAGE}
+License: GPL-3.0-only
 Description: ${DESCRIPTION}
  一个基于 headlessmc 的 Minecraft 启动器，内置 Java 运行时。
  用户无需单独安装 Java，安装后可从应用菜单启动。

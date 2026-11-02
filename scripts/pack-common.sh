@@ -115,3 +115,67 @@ pack_stage_clean() {
     rm -rf "$(pack_stage_base)"
     mkdir -p "$(pack_stage_base)"
 }
+
+# ---------------------------------------------------------------------------
+# 分发法律文件
+# ---------------------------------------------------------------------------
+#
+# GPL-3.0 第 6 条要求：以目标码形式分发时，必须附带许可证全文与版权声明。
+# 光把 LICENSE 放在 git 仓库里不算 —— 用户下载的是安装包，不是仓库。
+#
+# 所以每个安装包/便携包都要带上这三份：
+#   LICENSE                         本项目的 GPL-3.0 全文
+#   LEGAL/用户协议.txt               最终用户协议
+#   LEGAL/THIRD-PARTY-NOTICES.txt   headlessmc 的 MIT 声明（同样是硬性要求）
+#
+# 用法：pack_install_legal <目标目录> [目标目录...]
+#
+# 目标目录不存在会自动创建。缺文件直接报错 —— 宁可打包失败，
+# 也不要产出一个合规性残缺的安装包。
+pack_install_legal() {
+    local dest
+    local f
+
+    for dest in "$@"; do
+        mkdir -p "$dest"
+        for f in LICENSE "LEGAL/用户协议.txt" "LEGAL/THIRD-PARTY-NOTICES.txt"; do
+            if [[ ! -f "$_PACK_COMMON_ROOT/$f" ]]; then
+                echo "错误：缺少法律文件 $f（GPL-3.0 要求分发时附带）" >&2
+                return 1
+            fi
+            cp "$_PACK_COMMON_ROOT/$f" "$dest/"
+        done
+    done
+}
+
+# ---------------------------------------------------------------------------
+# 从程序目录里剔除法律文件
+# ---------------------------------------------------------------------------
+#
+# Linux 目录版（pack-linux.sh）把三份法律文件放在**包根目录**，方便用户
+# 解压后一眼看到。但 DEB/RPM/AppImage 都是拿 `cp -r "$SRC_DIR/."` 整体
+# 复制的 —— 于是那三份就跟着进了 /opt/hmwlx/。
+#
+# 后果：
+#   1. 安装包里同一个许可证有两份（/opt 一份、/usr/share/doc 一份）
+#   2. RPM 的 %files 是白名单，/opt/hmwlx/LICENSE 没列进去 ——
+#      rpmbuild 直接报 "Installed (but unpackaged) file(s) found" 失败
+#
+# 所以这三个发行版在 cp -r 之后、pack_install_legal 之前，先用本函数把
+# 程序目录里的法律文件删掉，只保留 /usr/share/doc 那份规范位置。
+#
+# 用法：pack_prune_legal <程序目录>
+pack_prune_legal() {
+    local prog_dir="$1"
+    local f
+
+    if [[ ! -d "$prog_dir" ]]; then
+        echo "错误：pack_prune_legal 的目标目录不存在: $prog_dir" >&2
+        return 1
+    fi
+
+    for f in LICENSE THIRD-PARTY-NOTICES.txt "用户协议.txt"; do
+        rm -f "$prog_dir/$f"
+    done
+}
+

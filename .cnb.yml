@@ -98,6 +98,10 @@
         - name: run-tests
           script: |
             chmod +x ./gradlew
+            # GPL-3.0 要求在源文件里附版权声明。新文件忘加的话，
+            # LICENSE 还在但个别文件看不出归属，合规上有缺口。
+            # 这个检查很便宜（只读文件），放在编译前尽早失败。
+            python3 ./scripts/add-license-header.py --check
             # --no-build-cache：quarkusGenerateCode 不把 application.properties 当输入，
             # 改 index-dependency / hmc.auth.yggdrasil.url 后缓存键不变，
             # 会恢复出旧配置的 bean 索引。
@@ -306,6 +310,8 @@
         - name: run-tests
           script: |
             chmod +x ./gradlew
+            # 许可证头检查，理由同 push 分支。
+            python3 ./scripts/add-license-header.py --check
             # --no-build-cache 的理由同 push 分支，见上方注释。
             ./gradlew test --no-daemon --no-build-cache --stacktrace
 

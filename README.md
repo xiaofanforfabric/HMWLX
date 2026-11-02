@@ -128,4 +128,21 @@ HMWLX 基于 [headlessmc](https://github.com/headlesshq/headlessmc) 构建 —�
 
 ---
 
+## 许可证
+
+HMWLX 以 **GNU 通用公共许可证第 3 版（GPL-3.0）** 发布，见 [LICENSE](LICENSE)。
+
+简单说：
+
+- ✅ 可以自由使用、修改、分发
+- ✅ 可以商用
+- ⚠️ **修改后必须同样以 GPL-3.0 开源** —— 不能改完闭源发布
+- ⚠️ 分发时必须保留版权声明，并附上许可证全文
+- ❌ 不提供任何担保
+
+底层依赖 headlessmc 采用 MIT 许可证，其版权声明保留在
+[LEGAL/THIRD-PARTY-NOTICES.txt](LEGAL/THIRD-PARTY-NOTICES.txt)。
+
+---
+
 [English](README_EN.md)

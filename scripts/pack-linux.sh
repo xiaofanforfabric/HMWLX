@@ -207,6 +207,16 @@ chmod 755 "$OUT_DIR/HMWLX"
 
 cp "$FAT_JAR" "$OUT_DIR/hmwlx.jar"
 
+# GPL-3.0 第 6 条：目录版也是分发物，必须带许可证全文。
+# 放在根目录而不是子目录 —— 用户解压后一眼就能看到。
+#
+# 这里不调 pack-common.sh 的 pack_install_legal：本脚本刻意不依赖它
+# （pack-common 假定调用方已 set -euo pipefail 且 cd 过，而这里是
+# 独立入口，加载顺序不同）。三行拷贝比引入一整个公共层更清楚。
+cp "$ROOT/LICENSE" "$OUT_DIR/"
+cp "$ROOT/LEGAL/用户协议.txt" "$OUT_DIR/"
+cp "$ROOT/LEGAL/THIRD-PARTY-NOTICES.txt" "$OUT_DIR/"
+
 # ---------------------------------------------------------------- 换 skiko
 #
 # fat jar 里的 skiko 原生库是构建机平台的（compose.desktop.currentOs）。
