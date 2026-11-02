@@ -1,5 +1,6 @@
 package org.cn.xiaofan.bootstrap
 
+import org.cn.xiaofan.config.AppConfig
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -56,6 +57,7 @@ object HeadlessMcBootstrap {
     fun start() {
         if (state.compareAndSet(State.NEW, State.STARTING)) {
             try {
+                applyDebugModeIfEnabled()
                 QuarkusLauncher.initializeAndStart()
                 state.set(State.READY)
                 started.countDown()
@@ -91,6 +93,44 @@ object HeadlessMcBootstrap {
             State.READY -> Unit
             else -> throw IllegalStateException("headlessmc 容器状态异常: $current")
         }
+    }
+
+    /**
+     * 按用户配置切换日志级别。
+     *
+     * <h2>为什么必须在这里、且必须在容器启动前</h2>
+     *
+     * headlessmc 的 `LogConfig` 明确写了 `@implNote`：除了 stacktraces，
+     * 其余各项**只在启动时建立 log handler 的那一刻读一次**，
+     * 运行期改配置没有效果。所以开关只能在这里落到系统属性上，
+     * 而且用户改完开关必须重启应用。
+     *
+     * <h2>两个键分别管什么</h2>
+     *
+     * | 键 | 作用 |
+     * |---|---|
+     * | `hmc.log.console-level` | headlessmc 自己的输出打到控制台的门槛（默认 WARN） |
+     * | `quarkus.log.level` | Quarkus 与其它依赖的根日志级别（默认 INFO） |
+     *
+     * <p>只设前者的话，headlessmc 的日志是放开了，但 Quarkus 的 DEBUG
+     * 仍然被根级别卡住 —— 用户要的是「全部详细日志」，所以两个都要设。
+     *
+     * <p>另外把 `min-level` 一起放宽：Quarkus 有个独立的记录下限，
+     * 低于它的级别连记录都不会发生，后面的 level 配置再高也没用。
+     */
+    private fun applyDebugModeIfEnabled() {
+        if (!AppConfig.isDebugMode()) return
+
+        // 用 System.setProperty 而不是改配置文件：
+        // 这是运行期决策，不该污染用户的 config.properties
+        // （那样关掉开关后还要记得把写进去的值删掉）。
+        System.setProperty("hmc.log.console-level", "DEBUG")
+        System.setProperty("quarkus.log.level", "DEBUG")
+        System.setProperty("quarkus.log.min-level", "DEBUG")
+
+        // 直接打到 stderr：此时日志系统还没起来，用 println 反而能被用户看到。
+        // 不打印敏感信息，只说「开了」。
+        System.err.println("[HMWLX] 调试模式已开启：日志级别 = DEBUG")
     }
 
     /**

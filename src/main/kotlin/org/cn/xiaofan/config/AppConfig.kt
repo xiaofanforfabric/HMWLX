@@ -36,6 +36,18 @@ object AppConfig {
     const val KEY_LEGAL = "LEGAL"
 
     /**
+     * 是否开启调试模式。
+     *
+     * <p>`true` 时把日志级别放宽到 DEBUG，包括上游 headlessmc 的输出。
+     * 默认 `false` —— 调试模式会显著增加日志量与 IO，且更慢。
+     *
+     * <p>**只在容器启动前生效**：headlessmc 的 `hmc.log.console-level` 在
+     * 日志 handler 初始化时读一次（见上游 `LogConfig` 的 `@implNote`），
+     * 运行期改它没有效果。所以开关改完必须重启应用。
+     */
+    const val KEY_DEBUG_MODE = "DEBUG_MODE"
+
+    /**
      * 测试专用的目录覆盖。设为非空时，[configFile] 直接用它，不再按平台推。
      *
      * 生产环境保持 `null`。这样测试不用去反射改 `XDG_CONFIG_HOME`——
@@ -57,6 +69,27 @@ object AppConfig {
     }
 
     /**
+     * 读取「是否开启调试模式」。
+     *
+     * <p>读不到时返回 `false`（关闭）：调试模式是诊断手段，
+     * 默认必须安静，出问题也是先关掉再说。
+     */
+    fun isDebugMode(): Boolean {
+        val file = configFile() ?: return false
+        return runCatching { readAll(file)[KEY_DEBUG_MODE]?.toBooleanStrictOrNull() ?: false }
+            .getOrDefault(false)
+    }
+
+    /**
+     * 设置调试模式。
+     *
+     * <p>只改 [KEY_DEBUG_MODE] 一项，其余键原样保留 —— 与本类其它写入方法一致。
+     *
+     * @return 写入是否成功。失败不抛异常。
+     */
+    fun setDebugMode(enabled: Boolean): Boolean = setBoolean(KEY_DEBUG_MODE, enabled)
+
+    /**
      * 记录用户已同意协议。
      *
      * 只改动 [KEY_LEGAL] 一项，其余已有的键原样保留 —— 用户可能手工往里加过东西，
@@ -65,11 +98,22 @@ object AppConfig {
      * @return 写入是否成功。失败不抛异常：写不进去最多下次再弹一次，
      *         不该因此让用户用不了软件。
      */
-    fun setLegalAccepted(accepted: Boolean = true): Boolean {
+    fun setLegalAccepted(accepted: Boolean = true): Boolean = setBoolean(KEY_LEGAL, accepted)
+
+    /**
+     * 写入一个布尔配置项。
+     *
+     * <p>只改这一项，其余已有的键原样保留 —— 用户可能手工往里加过东西，
+     * 直接覆盖会把人家的内容冲掉。
+     *
+     * @return 写入是否成功。失败不抛异常：配置写不进去不该让用户用不了软件，
+     *         最多是下次启动回到默认值。
+     */
+    private fun setBoolean(key: String, value: Boolean): Boolean {
         val file = configFile() ?: return false
         return runCatching {
             val existing = if (file.isFile) readAll(file) else LinkedHashMap()
-            existing[KEY_LEGAL] = accepted.toString()
+            existing[key] = value.toString()
             writeAll(file, existing)
             true
         }.getOrDefault(false)
