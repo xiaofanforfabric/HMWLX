@@ -196,8 +196,19 @@ object MinecraftDownloadService {
      * <p>安装目录与启动器扫的是同一个（[GameVersionService.resolveGameDir]），
      * 否则下完在版本列表里看不到。
      *
-     * <p>上游的 `installClient` 会先检查是否已安装：已存在且不是强装时
-     * 直接返回现有版本，不会重复下载。这是它自己的行为，不用我们判断。
+     * <h2>重复安装的行为（已核对上游源码）</h2>
+     *
+     * `AbstractClientInstaller.installClient` 有两层判断：
+     *
+     * 1. `versionMatcherService.match(id, installed, ...)` —— 已装的版本命中后
+     *    **直接 return**，不下载、不写文件。这是常态路径。
+     * 2. `VanillaInstallerImpl.downloadVersion` 里的 `Files.exists(version.json)`
+     *    —— 命中只跳过下载 JSON，仍会走 `installClient` 写文件、解 natives。
+     *    这层只在「JSON 在、但 matcher 没认出来」时才走到。
+     *
+     * <p>所以重复点同一个版本一般不会重下几百 MB。但上游返回的 `Version`
+     * 没有可靠的「本次是否真的写盘了」标志，我们**不猜**：装完后真的去本地
+     * 扫一遍，扫到才报成功（见 [verifyInstalled]）。
      *
      * @param versionId 版本号，如 `1.21.4`
      * @param onProgress 进度回调，参数是当前阶段的描述文字。下载耗时较长，
@@ -209,7 +220,6 @@ object MinecraftDownloadService {
     ): InstallResult = withContext(Dispatchers.IO) {
         runCatching {
             val platformService = HeadlessMcBootstrap.bean(PlatformService::class.java)
-            val vanilla = platformService.vanillaPlatform
 
             onProgress("正在解析版本 $versionId …")
 
@@ -238,13 +248,47 @@ object MinecraftDownloadService {
             // 该版本号就是用户点的那个，直接用它最可靠。
             installer.installClient(id, dir, TypedMapImpl())
 
-            onProgress("安装完成")
-            InstallResult.Success(versionId)
+            // 上游没抛异常不等于「装好了」—— 它可能根本没动文件。
+            // 真的去本地扫一遍，扫到才敢说成功。
+            onProgress("正在确认安装结果 …")
+            verifyInstalled(versionId, dir)
         }.fold(
             onSuccess = { it },
             onFailure = { InstallResult.Failed(it.describe()) },
         )
     }
+
+    /**
+     * 确认版本真的落到磁盘上了。
+     *
+     * <p>为什么要这一步：上游 `installClient` 不抛异常时也可能什么都没装
+     * （matcher 认错、目录不可写但错误被吞）。直接报「安装完成」而版本列表里
+     * 没有，比报错更让人困惑 —— 用户会以为列表坏了，反复重试。
+     *
+     * <p>扫的是与界面**同一个目录、同一套扫描逻辑**（[GameVersionService.scan]），
+     * 所以这里能扫到就等于界面能扫到。这同时验证了
+     * 「安装目录与扫描目录一致」这个前提 —— 万一不一致，会在这里暴露，
+     * 而不是等用户发现列表是空的。
+     */
+    private suspend fun verifyInstalled(versionId: String, dir: Path): InstallResult =
+        withContext(Dispatchers.IO) {
+            when (val found = GameVersionService.scan()) {
+                is GameVersionService.VersionScanResult.Success -> {
+                    if (found.versions.any { it.id == versionId }) {
+                        InstallResult.Success(versionId)
+                    } else {
+                        InstallResult.Failed(
+                            "安装流程结束了，但在 $dir 里找不到版本 $versionId。" +
+                                "可能是磁盘权限或上游安装器异常，请查看日志。",
+                        )
+                    }
+                }
+
+                is GameVersionService.VersionScanResult.Failed -> InstallResult.Failed(
+                    "安装流程结束了，但扫描本地版本失败：${found.reason}",
+                )
+            }
+        }
 }
 
 /** 把异常整理成一句能显示给用户的话。 */

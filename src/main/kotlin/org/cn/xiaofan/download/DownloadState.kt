@@ -208,8 +208,9 @@ class DownloadState internal constructor() {
     /**
      * 下载并安装一个版本。
      *
-     * <p>成功后会推进 [localVersionsToken]，界面据此重新扫描本地版本列表，
-     * 让用户立刻看到新装的版本。
+     * <p>**只有 [MinecraftDownloadService.install] 确认版本真的落到磁盘上
+     * （它内部会重扫本地版本）**，这里才推进 [localVersionsToken]。
+     * 否则会出现「界面提示安装完成，版本列表里却没有」—— 比直接报错更让人困惑。
      *
      * <p>同样只允许放行态调用 —— 这是最后一道闸，界面层不该是唯一的守卫。
      */
