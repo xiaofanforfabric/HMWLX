@@ -78,7 +78,14 @@ class AccountValidityState(
         }
     }
 
-    /** 逐个刷新，收集失效的账号。网络操作，全程在 IO 线程。 */
+    /**
+     * 逐个刷新，收集失效的账号。网络操作，全程在 IO 线程。
+     *
+     * <p>如果一个账号都没能真正验成（全部网络失败/限流/异常），抛出
+     * [IllegalStateException] —— 此时得到的「空集」并不意味着「账号都有效」，
+     * 而是「这一轮什么都没证实」。上层据此保留旧标记，避免把已标灰的
+     * 失效账号全部擦白。
+     */
     private suspend fun computeInvalidKeys(): Set<String> = withContext(Dispatchers.IO) {
         val service = runCatching {
             HeadlessMcBootstrap.bean(AuthService::class.java)
@@ -88,27 +95,39 @@ class AccountValidityState(
         }
 
         val invalid = mutableSetOf<String>()
+        var attempted = 0
+        var verified = 0
 
         for (account in service.accounts) {
             // 离线账号没有 token 可刷新，它们「永远不会失效」——
             // 把离线号标成失效只会误导用户。
             if (!account.isMicrosoftAccount && !account.isYggdrasilAccount) continue
+            attempted++
 
-            val ok = when (val result = refreshOne(account)) {
-                is AuthPreflight.Result.Ready -> true
+            val key = "${account.provider}:${account.uuid}"
+            when (val result = refreshOne(account)) {
+                is AuthPreflight.Result.Ready -> {
+                    verified++
+                    // 上一轮标过失效、这轮验成了：说明用户已经重新登录，摘掉标记。
+                    invalid.remove(key)
+                }
 
                 is AuthPreflight.Result.CredentialInvalid,
                 is AuthPreflight.Result.SessionExpired,
-                -> false
+                -> {
+                    verified++
+                    invalid.add(key)
+                }
 
-                // 网络问题/限流：**不能**判定为失效。账号可能是好的，
+                // 网络问题/限流/未预期：**不能**判定为失效。账号可能是好的，
                 // 只是这次没验证成。误标成失效会让用户白白去重登。
-                else -> true
+                // 也不计入 verified —— 这一轮对该账号一无所知。
+                else -> Unit
             }
+        }
 
-            if (!ok) {
-                invalid.add("${account.provider}:${account.uuid}")
-            }
+        if (attempted > 0 && verified == 0) {
+            throw IllegalStateException("本轮校验未能确认任何账号（共 $attempted 个待校验）")
         }
 
         invalid
@@ -145,12 +164,18 @@ class AccountValidityState(
  *
  * <p>由 [org.cn.xiaofan.ui.HmwLxApp] 持有并传给账号栏 ——
  * 状态放页面里的话，切页面会重建、标记丢失。
+ *
+ * <p>**不要**把 `scope` 用作 `remember` 的 key：
+ * `rememberCoroutineScope()` 会随宿主组合销毁/重建而换实例，
+ * 一换实例就会 new 一个状态、`invalidKeys` 随之清零 ——
+ * 那正是本类 KDoc 说的「标记丢失」，只是从页面层级搬到了这里。
+ * 状态本身不依赖任何外部输入，用 `remember { }` 即可。
  */
 @androidx.compose.runtime.Composable
 fun rememberAccountValidityState(
     scope: CoroutineScope,
 ): AccountValidityState {
-    return androidx.compose.runtime.remember(scope) {
+    return androidx.compose.runtime.remember {
         AccountValidityState(scope)
     }
 }
