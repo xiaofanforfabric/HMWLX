@@ -215,7 +215,7 @@ fun CliTerminalScreen(
                     }
                 },
             ) {
-                Text(text(TextKey.SETTINGS_CLI_ENTER))
+                Text(text(TextKey.CLI_TERMINAL_RETRY))
             }
         }
     }

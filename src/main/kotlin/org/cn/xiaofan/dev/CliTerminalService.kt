@@ -135,18 +135,31 @@ object CliTerminalService {
     /** 结束终端进程。 */
     fun stop() {
         val p = process ?: return
-        runCatching {
-            writer?.close()
-            // 先温和地关 stdin，让 CLI 自己的 exit 逻辑有机会清理
-            p.waitFor(2, TimeUnit.SECONDS)
-        }
-        runCatching { p.destroy() }
-        runCatching { if (p.isAlive) p.destroyForcibly() }
+        val w = writer
 
+        // 【不能在调用线程上等】stop() 是从按钮 onClick 直接调的，
+        // 等于在 Compose 主线程上同步阻塞，窗口会卡死。
+        // 所以状态同步先做（界面立即响应），真正的关闭放到后台线程。
         process = null
         writer = null
         _state.value = State.STOPPED
         _output.tryEmit("[HMWLX] 终端已关闭")
+
+        Thread({
+            // 先关 stdin，给 CLI 自己的 exit 逻辑一个清理机会
+            runCatching { w?.close() }
+            // 最多等 2 秒，超时就直接杀 —— 但这是在后台线程上等，不阻塞 UI
+            val exited = runCatching { p.waitFor(2, TimeUnit.SECONDS) }.getOrDefault(false)
+            if (!exited) {
+                runCatching { p.destroy() }
+                // destroy() 只是发 SIGTERM，进程赖着不走再强杀
+                val killed = runCatching { p.waitFor(1, TimeUnit.SECONDS) }.getOrDefault(false)
+                if (!killed) runCatching { p.destroyForcibly() }
+            }
+        }, "hmwlx-cli-stopper").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     /** 读进程输出，逐行推到 flow。 */

@@ -34,14 +34,6 @@ object TextKey {
     /** 玩家头像的描述。`{0}` 为玩家名。 */
     const val ACCOUNT_AVATAR_DESCRIPTION = "account.avatar.description"
 
-    /**
-     * 账号失效标志。
-     *
-     * <p>显示在账号栏上，表示这个账号的登录信息已过期或被撤销，
-     * 需要重新登录才能继续用。
-     */
-    const val ACCOUNT_INVALID_BADGE = "account.invalid.badge"
-
     // --- 账号切换 ---
 
     /** 账号切换界面标题。 */
@@ -329,6 +321,9 @@ object TextKey {
 
     /** 嘉豪终端：已停止。 */
     const val CLI_TERMINAL_STOPPED = "cli.terminal.stopped"
+
+    /** 嘉豪终端：启动失败后重新启动。 */
+    const val CLI_TERMINAL_RETRY = "cli.terminal.retry"
 
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"
