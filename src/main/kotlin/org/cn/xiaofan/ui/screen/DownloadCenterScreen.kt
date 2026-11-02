@@ -1,5 +1,7 @@
 package org.cn.xiaofan.ui.screen
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -21,19 +24,30 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.cn.xiaofan.download.DownloadAccess
 import org.cn.xiaofan.download.DownloadState
 import org.cn.xiaofan.download.MinecraftDownloadService
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * 下载中心。
@@ -267,20 +281,39 @@ private fun AllowedView(
             }
 
             is DownloadState.VersionListUi.Loaded -> {
-                if (list.versions.isEmpty()) {
-                    Text(
-                        text = text(TextKey.DOWNLOAD_LIST_EMPTY),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // 页签选中项记在页面里而不是 DownloadState：它纯属展示状态，
+                // 用户切走再回来该回到默认的「正式版」，而不是停在上次看的分类。
+                var tab by remember {
+                    mutableStateOf(MinecraftDownloadService.VersionCategory.RELEASE)
+                }
+
+                CategoryTabs(
+                    selected = tab,
+                    all = list.versions,
+                    onSelect = { tab = it },
+                )
+
+                // ALL 表示不过滤；其余按分类筛。
+                val shown = if (tab == MinecraftDownloadService.VersionCategory.ALL) {
+                    list.versions
                 } else {
-                    Text(
-                        text = Messages.get(TextKey.DOWNLOAD_LIST_TITLE, list.versions.size),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    list.versions.filter { it.category == tab }
+                }
+
+                if (shown.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = text(TextKey.DOWNLOAD_TAB_EMPTY),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
                     DownloadableVersionList(
-                        versions = list.versions,
+                        versions = shown,
                         installingId = installing?.versionId,
                         enabled = installing == null,
                         onInstall = { version ->
@@ -288,6 +321,66 @@ private fun AllowedView(
                         },
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 分类页签。
+ *
+ * <p>五个页签：全部 / 正式版 / 快照版 / 愚人节版 / 远古版。
+ * 默认选中正式版 —— 绝大多数用户要的就是这个，不该让他们先点一下。
+ *
+ * <p>每个页签后面带数量：用户能一眼看出「愚人节版只有 8 个」，
+ * 不至于以为列表坏了。
+ */
+@Composable
+private fun CategoryTabs(
+    selected: MinecraftDownloadService.VersionCategory,
+    all: List<MinecraftDownloadService.DownloadableVersion>,
+    onSelect: (MinecraftDownloadService.VersionCategory) -> Unit,
+) {
+    // 显示顺序：默认的正式版排第一，然后是常用的快照版，
+    // 愚人节/远古这种小众的往后放，「全部」放最后（它是兜底而不是首选）。
+    val tabs = listOf(
+        MinecraftDownloadService.VersionCategory.RELEASE to TextKey.DOWNLOAD_TAB_RELEASE,
+        MinecraftDownloadService.VersionCategory.SNAPSHOT to TextKey.DOWNLOAD_TAB_SNAPSHOT,
+        MinecraftDownloadService.VersionCategory.APRIL_FOOLS to TextKey.DOWNLOAD_TAB_APRIL_FOOLS,
+        MinecraftDownloadService.VersionCategory.LEGACY to TextKey.DOWNLOAD_TAB_LEGACY,
+        MinecraftDownloadService.VersionCategory.ALL to TextKey.DOWNLOAD_TAB_ALL,
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tabs.forEach { (category, labelKey) ->
+            val count = if (category == MinecraftDownloadService.VersionCategory.ALL) {
+                all.size
+            } else {
+                all.count { it.category == category }
+            }
+            val isSelected = selected == category
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                } else {
+                    Color.Transparent
+                },
+                modifier = Modifier.clickable { onSelect(category) },
+            ) {
+                Text(
+                    text = "${text(labelKey)} ($count)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
             }
         }
     }
@@ -314,7 +407,9 @@ private fun DownloadableVersionList(
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                VersionIcon(version.category)
                 Text(
                     text = version.id,
                     style = MaterialTheme.typography.bodyMedium,
@@ -344,10 +439,56 @@ private fun DownloadableVersionList(
     }
 }
 
+/**
+ * 版本图标。
+ *
+ * <p>按分类取图：正式版草方块 / 快照版 / 愚人节版 / 远古版。
+ * 「全部」页签里也会显示每行自己的分类图标 —— 分类图标反映的是
+ * **这个版本是什么**，不是**当前在看哪个页签**。
+ *
+ * <p>走 ClassLoader 读 classpath 资源，与 `VersionListScreen.VersionLogo` 一致：
+ * 项目没启用 Compose Resources 代码生成，`painterResource` 用不了。
+ */
+@Composable
+private fun VersionIcon(category: MinecraftDownloadService.VersionCategory) {
+    val resource = when (category) {
+        MinecraftDownloadService.VersionCategory.RELEASE -> "/images/icon-release.png"
+        MinecraftDownloadService.VersionCategory.SNAPSHOT -> "/images/icon-snapshot.png"
+        MinecraftDownloadService.VersionCategory.APRIL_FOOLS -> "/images/icon-aprilfools.png"
+        MinecraftDownloadService.VersionCategory.LEGACY -> "/images/icon-old.png"
+        // ALL 不该出现在单个版本上，但枚举必须穷尽。
+        MinecraftDownloadService.VersionCategory.ALL -> "/images/icon-old.png"
+    }
+
+    var bitmap by remember(resource) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(resource) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                DownloadCenterLogo.javaClass
+                    .getResourceAsStream(resource)
+                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
+            }.getOrNull()
+        }
+    }
+
+    val image = bitmap ?: return
+
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        filterQuality = FilterQuality.High,
+        // 列表里的图标要小：24dp 足够认出分类，又不会把行撑高。
+        modifier = Modifier.size(24.dp),
+    )
+}
+
+/** 只为拿到 classloader 而存在的锚点。 */
+private object DownloadCenterLogo
+
 /** 结果提示条。 */
 @Composable
-private fun ResultBanner(
-    text: String,
+private fun ResultBanner(    text: String,
     isError: Boolean,
     onDismiss: () -> Unit,
 ) {

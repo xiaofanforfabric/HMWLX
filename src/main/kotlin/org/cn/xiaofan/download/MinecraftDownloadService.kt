@@ -2,30 +2,33 @@ package org.cn.xiaofan.download
 
 import io.github.headlesshq.headlessmc.platform.Platform
 import io.github.headlesshq.headlessmc.platform.PlatformService
-import io.github.headlesshq.headlessmc.platform.PlatformVersion
-import io.github.headlesshq.headlessmc.platform.VanillaVersion
 import io.github.headlesshq.headlessmc.platform.client.ClientInstaller
 import io.github.headlesshq.headlessmc.platform.client.ClientSupport
 import io.github.headlesshq.headlessmc.platform.VersionID
-import io.github.headlesshq.headlessmc.util.typemap.TypedMap
 import io.github.headlesshq.headlessmc.util.typemap.TypedMapImpl
 import io.github.headlesshq.headlessmc.version.arg.VersionArg
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.config.Json
 import org.cn.xiaofan.version.GameVersionService
 import java.nio.file.Path
 
 /**
  * 版本清单与下载服务。
  *
- * <p>全部复用上游 headlessmc 的实现，不自己拼下载逻辑：
+ * <p>分两层协作：
  *
- * | 要做的事 | 上游接口 |
+ * | 要做的事 | 谁做 |
  * |---|---|
- * | 可选版本列表 | [VanillaVersionService.getVersions] |
- * | 解析版本号 → [VersionID] | [VersionID.resolve] |
- * | 下载并安装 | [ClientInstaller.installClient] |
+ * | 版本列表 | **自己拉 Mojang manifest**（上游丢掉了 type 字段） |
+ * | 下载安装 | **上游** `ClientInstaller.installClient` |
+ *
+ * <p>列表自己拉是因为上游 `VanillaVersionServiceImpl.map()` 只保留了版本号，
+ * 把 manifest 里的 `type` 丢掉了 —— 没有 type 就没法分正式版 / 快照 / 远古版。
+ *
+ * <p>下载**必须**走上游：那边要处理资源索引、库校验、natives 解压、版本继承，
+ * 而且启动链路依赖它装出来的目录结构。自己写一套的话，装出来的东西可能起不来。
  *
  * <p>自己写一套下载器意味着要处理资源索引、库校验、natives 解压、
  * 版本继承…… 这些上游都做过了，而且启动链路也依赖它装出来的目录结构。
@@ -37,20 +40,48 @@ import java.nio.file.Path
 object MinecraftDownloadService {
 
     /**
+     * 版本分类。
+     *
+     * <h2>为什么分这五类</h2>
+     *
+     * Mojang 官方清单里 `type` 只有四个值：`release` / `snapshot` /
+     * `old_beta` / `old_alpha`。**愚人节版本没有独立 type**，它们是
+     * `snapshot` 的一部分，只能靠版本号识别 —— 所以这里多出一个分类。
+     *
+     * | 分类 | 判定 |
+     * |---|---|
+     * | [RELEASE] | `type == release` |
+     * | [SNAPSHOT] | `type == snapshot` 且不在愚人节名单里 |
+     * | [APRIL_FOOLS] | `type == snapshot` 且版本号命中 [APRIL_FOOLS_IDS] |
+     * | [LEGACY] | `type == old_beta` 或 `old_alpha` |
+     * | [ALL] | 不分类，全都要（仅用于界面上的「全部」页签，不是数据分类） |
+     */
+    enum class VersionCategory {
+        RELEASE,
+        SNAPSHOT,
+        APRIL_FOOLS,
+        LEGACY,
+
+        /** 仅用于界面「全部」页签；[classify] 永远不会返回它。 */
+        ALL,
+    }
+
+    /**
      * 一个可下载的版本。
      *
-     * @param id 版本号，如 `1.21.4`。传给下载时用这个字符串。
-     * @param type 版本类型，如 `release` / `snapshot` / `old_beta`。
-     *   来自 Mojang 版本清单，界面用来分组或标注。
+     * @param id 版本号，如 `1.21.4`。下载时传这个字符串。
+     * @param type Mojang 原始 type：`release` / `snapshot` / `old_beta` / `old_alpha`
+     * @param category 按 [classify] 算出的界面分类
      */
     data class DownloadableVersion(
         val id: String,
         val type: String,
+        val category: VersionCategory,
     )
 
     /** 版本清单获取结果。 */
     sealed interface VersionListResult {
-        /** @param versions 按发布时间倒序（上游已排好，这是它返回的顺序）。 */
+        /** @param versions 按发布时间倒序（Mojang 清单本身就是这个顺序）。 */
         data class Success(val versions: List<DownloadableVersion>) : VersionListResult
 
         /** 拿不到清单。`reason` 可直接展示。 */
@@ -58,28 +89,92 @@ object MinecraftDownloadService {
     }
 
     /**
+     * 官方版本清单地址。
+     *
+     * <p>**必须与上游 headlessmc 用同一个 URL**
+     * （见上游 `VanillaFactory`）—— 两边数据源不一致的话，界面列出来的版本
+     * 有可能下载时解析不到，用户点了就报错。
+     */
+    private const val MANIFEST_URL =
+        "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+
+    /**
+     * 愚人节版本名单。
+     *
+     * <p>Mojang 不给愚人节版本单独的 type，只能靠版本号识别。
+     * 清单来自历年的实际发布，新增年份时在这里补一行。
+     *
+     * <p>为什么不按「版本号是否含字母」之类的规则猜：
+     * 普通快照也是 `25w14a` 这种格式，规则一写就误伤一大片。
+     */
+    private val APRIL_FOOLS_IDS = setOf(
+        "15w14a",                  // 2015 爱情与拥抱更新
+        "1.RV-Pre1",               // 2016 时尚更新
+        "3D Shareware v1.34",      // 2019 3D 共享软件
+        "20w14infinite",           // 2020 无限维度
+        "22w13oneBlockAtATime",    // 2022 一次一个方块
+        "23w13a_or_b",             // 2023 投票更新
+        "24w14potato",             // 2024 有毒土豆
+        "25w14craftmine",          // 2025 合成我的世界
+    )
+
+    /** 按 Mojang 的 type 与版本号算出界面分类。 */
+    fun classify(id: String, type: String): VersionCategory = when (type) {
+        "release" -> VersionCategory.RELEASE
+        "old_beta", "old_alpha" -> VersionCategory.LEGACY
+        else -> if (id in APRIL_FOOLS_IDS) {
+            VersionCategory.APRIL_FOOLS
+        } else {
+            VersionCategory.SNAPSHOT
+        }
+    }
+
+    /**
      * 拉取官方版本清单。
      *
-     * <p>**联网操作**，走 [Dispatchers.IO]。上游有缓存，重复调用不会每次都下。
+     * <h2>为什么自己拉而不直接用上游的 getVersions()</h2>
      *
-     * <p>过滤掉 `old_*` 系列（远古版本）：它们下载和启动都需要额外处理，
-     * 且实际使用者极少。要放开的话把 `filter` 那段删掉即可。
+     * 上游 `VanillaVersionServiceImpl.map()` 只保留了版本号，
+     * **把 manifest 里的 `type` 字段丢掉了**（`createVanillaVersion(version.id())`
+     * 只传 id）。没有 type 就无法区分正式版 / 快照 / 远古版 —— 而这正是
+     * 界面要的分类。
+     *
+     * <p>下载仍然走上游的 installer：那边需要完整的版本 JSON 解析能力，
+     * 我们只负责列表这一层。
+     *
+     * <p>**联网操作**，走 [Dispatchers.IO]。
      */
     suspend fun listVersions(): VersionListResult = withContext(Dispatchers.IO) {
         runCatching {
-            val platformService = HeadlessMcBootstrap.bean(PlatformService::class.java)
-            val vanilla = platformService.vanillaPlatform
-            val service = vanilla.versionService
+            val text = fetchText(MANIFEST_URL)
+            val root = Json.parse(text)
+            // 清单结构：{ "latest": {...}, "versions": [ {id, type, url, time}, ... ] }
+            val versions = (root as? Map<*, *>)?.get("versions") as? List<*>
+                ?: error("版本清单格式异常：缺少 versions 数组")
 
-            // getVersions() 返回 SequencedSet，顺序就是上游认为的合理顺序
-            // （新的在前）。直接转 List 保留顺序，不要 sort。
-            service.versions
-                .filter { it.name !in OLD_VERSION_PREFIXES_FILTERED_OUT }
-                .map { DownloadableVersion(id = it.name, type = it.platformName) }
+            versions.mapNotNull { item ->
+                val id = Json.stringAt(item, "id") ?: return@mapNotNull null
+                val type = Json.stringAt(item, "type") ?: return@mapNotNull null
+                DownloadableVersion(
+                    id = id,
+                    type = type,
+                    category = classify(id, type),
+                )
+            }
         }.fold(
             onSuccess = { VersionListResult.Success(it) },
             onFailure = { VersionListResult.Failed(it.describe()) },
         )
+    }
+
+    /** 取一段文本。超时给足 —— 版本清单有几百 KB。 */
+    private fun fetchText(url: String): String {
+        val conn = java.net.URI(url).toURL().openConnection().apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            setRequestProperty("User-Agent", "HMWLX")
+        }
+        return conn.getInputStream().use { it.readBytes().toString(Charsets.UTF_8) }
     }
 
     /** 下载结果。 */
@@ -148,16 +243,6 @@ object MinecraftDownloadService {
             onFailure = { InstallResult.Failed(it.describe()) },
         )
     }
-
-    /**
-     * 不展示的版本前缀。
-     *
-     * <p>远古版本（`old_alpha` / `old_beta`）和快照之外的实验版本下载链路不同，
-     * 容易报错。真正要下的时候再放开。
-     */
-    private val OLD_VERSION_PREFIXES_FILTERED_OUT = setOf(
-        "old_alpha", "old_beta",
-    )
 }
 
 /** 把异常整理成一句能显示给用户的话。 */

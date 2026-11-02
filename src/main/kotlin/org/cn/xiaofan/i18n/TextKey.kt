@@ -241,6 +241,26 @@ object TextKey {
     /** 重新拉取版本清单。 */
     const val DOWNLOAD_RELOAD_LIST = "download.reload.list"
 
+    // --- 版本分类页签 ---
+
+    /** 页签：全部。 */
+    const val DOWNLOAD_TAB_ALL = "download.tab.all"
+
+    /** 页签：正式版。 */
+    const val DOWNLOAD_TAB_RELEASE = "download.tab.release"
+
+    /** 页签：快照版。 */
+    const val DOWNLOAD_TAB_SNAPSHOT = "download.tab.snapshot"
+
+    /** 页签：愚人节版。 */
+    const val DOWNLOAD_TAB_APRIL_FOOLS = "download.tab.april.fools"
+
+    /** 页签：远古版。 */
+    const val DOWNLOAD_TAB_LEGACY = "download.tab.legacy"
+
+    /** 当前分类下没有版本。 */
+    const val DOWNLOAD_TAB_EMPTY = "download.tab.empty"
+
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"
 
