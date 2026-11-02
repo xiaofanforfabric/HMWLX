@@ -203,6 +203,23 @@ object TextKey {
     /** 被微软限流、无法完成校验时的文案。 */
     const val DOWNLOAD_RATE_LIMITED = "download.rate.limited"
 
+    /**
+     * 有微软账号但凭据已失效时的文案。
+     *
+     * <p>必须和 [DOWNLOAD_REQUIRE_MS_ACCOUNT] 分开：用户明明登录着，
+     * 只是 token 过期了，却被告知「你没有登录正版账号」—— 他会以为
+     * 账号被删了，跑去重新登录又发现账号还在，彻底懵。
+     */
+    const val DOWNLOAD_CREDENTIAL_INVALID = "download.credential.invalid"
+
+    /**
+     * 校验过程本身出错（读账号列表失败等）时的文案。
+     *
+     * <p>和上面两类都不同：这不是「你没号」，也不是「号坏了」，
+     * 是「我们没能完成校验」。用户该做的是重启或看日志。
+     */
+    const val DOWNLOAD_CHECK_ERROR = "download.check.error"
+
     /** 正在校验账号时的提示。 */
     const val DOWNLOAD_CHECKING = "download.checking"
 
