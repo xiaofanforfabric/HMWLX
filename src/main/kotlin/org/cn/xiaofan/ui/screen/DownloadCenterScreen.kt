@@ -405,7 +405,7 @@ private fun DownloadableVersionList(
     ) {
         items(versions, key = { it.id }) { version ->
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -478,8 +478,8 @@ private fun VersionIcon(category: MinecraftDownloadService.VersionCategory) {
         bitmap = image,
         contentDescription = null,
         filterQuality = FilterQuality.High,
-        // 列表里的图标要小：24dp 足够认出分类，又不会把行撑高。
-        modifier = Modifier.size(24.dp),
+        // 源图 128~512px，缩到 32dp 仍要开高质量过滤，否则纹理糊成噪点。
+        modifier = Modifier.size(32.dp),
     )
 }
 
