@@ -65,6 +65,12 @@ mkdir -p "$RPM_STAGE/opt/${PKG_NAME}" \
 cp -r "$SRC_DIR/." "$RPM_STAGE/opt/${PKG_NAME}/"
 ln -sf "/opt/${PKG_NAME}/HMWLX" "$RPM_STAGE/usr/bin/${PKG_NAME}"
 
+# 目录版把法律文件放在包根目录（见 pack-linux.sh），cp -r 会一起带进
+# /opt。这里剔除，只保留 /usr/share/doc 下的那份 —— 否则同一个许可证
+# 在包里有两份，而且 /opt 里那份不在 %files 白名单内，rpmbuild 会报
+# "Installed (but unpackaged) file(s) found" 直接失败。
+pack_prune_legal "$RPM_STAGE/opt/${PKG_NAME}"
+
 # GPL-3.0 第 6 条：以目标码分发必须附带许可证全文。
 # /usr/share/doc/<pkg>/ 是 RPM 系的惯例位置。
 pack_install_legal "$RPM_STAGE/usr/share/doc/${PKG_NAME}"
@@ -166,6 +172,16 @@ exit 0
 /usr/bin/${PKG_NAME}
 /usr/share/applications/${PKG_NAME}.desktop
 /usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png
+
+# 法律文件。%files 是白名单 —— 没列的文件不进包，所以
+# pack_install_legal 拷过去的那些必须在这里显式声明，否则
+# DEB / AppImage / ZIP / 目录版都有许可证，唯独 RPM 装完没有。
+#
+# 用 %license 而不是裸路径：rpm 会把它归到 rpm -q --license 可查的
+# 许可证类别，也自动套上 0644 root:root，比列路径更正统。
+%license /usr/share/doc/${PKG_NAME}/LICENSE
+%license /usr/share/doc/${PKG_NAME}/THIRD-PARTY-NOTICES.txt
+%doc /usr/share/doc/${PKG_NAME}/用户协议.txt
 SPEC
 
 # ------------------------------------------------------------ 打包

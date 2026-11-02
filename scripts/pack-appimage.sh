@@ -89,6 +89,10 @@ mkdir -p "$APPDIR/usr/bin" \
 mkdir -p "$APPDIR/usr/bin/HMWLX"
 cp -r "$SRC_DIR/." "$APPDIR/usr/bin/HMWLX/"
 
+# 目录版把法律文件放在包根目录，cp -r 会一起带进来。
+# 剔除，只保留 usr/share/doc 那份（理由见 pack-common.sh）。
+pack_prune_legal "$APPDIR/usr/bin/HMWLX"
+
 # GPL-3.0 第 6 条：AppImage 是分发物，必须带许可证全文。
 # 放 usr/share/doc/hmwlx/，和 DEB/RPM 布局一致。
 pack_install_legal "$APPDIR/usr/share/doc/${PKG_NAME}"
