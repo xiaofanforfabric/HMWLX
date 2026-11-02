@@ -238,6 +238,19 @@ object AuthPreflight {
      * 用户进服被踢时才发现 token 早就空了。
      */
     private suspend fun checkYggdrasil(account: Account): Result = withContext(Dispatchers.IO) {
+        refreshYggdrasil(account)
+    }
+
+    /**
+     * 刷新**指定**的皮肤站账号，不读「当前账号」。
+     *
+     * <p>与 [refreshMicrosoft] 同理由：`check()` 只认当前选中的账号，
+     * 而账号栏要把**每个**账号各自标成有效/失效，需要按账号逐个刷。
+     *
+     * <p>判定语义见 [checkYggdrasil] 的 KDoc —— 尤其是「会话失效时
+     * 上游不抛异常而是静默降级」这一点，必须识别出来。
+     */
+    suspend fun refreshYggdrasil(account: Account): Result = withContext(Dispatchers.IO) {
         val authService = authServiceOrNull() ?: return@withContext Result.Unexpected(
             detail = "无法取得 AuthService",
             cause = null,

@@ -203,6 +203,23 @@ object TextKey {
     /** 被微软限流、无法完成校验时的文案。 */
     const val DOWNLOAD_RATE_LIMITED = "download.rate.limited"
 
+    /**
+     * 有微软账号但凭据已失效时的文案。
+     *
+     * <p>必须和 [DOWNLOAD_REQUIRE_MS_ACCOUNT] 分开：用户明明登录着，
+     * 只是 token 过期了，却被告知「你没有登录正版账号」—— 他会以为
+     * 账号被删了，跑去重新登录又发现账号还在，彻底懵。
+     */
+    const val DOWNLOAD_CREDENTIAL_INVALID = "download.credential.invalid"
+
+    /**
+     * 校验过程本身出错（读账号列表失败等）时的文案。
+     *
+     * <p>和上面两类都不同：这不是「你没号」，也不是「号坏了」，
+     * 是「我们没能完成校验」。用户该做的是重启或看日志。
+     */
+    const val DOWNLOAD_CHECK_ERROR = "download.check.error"
+
     /** 正在校验账号时的提示。 */
     const val DOWNLOAD_CHECKING = "download.checking"
 
@@ -254,6 +271,59 @@ object TextKey {
 
     /** 当前分类下没有版本。 */
     const val DOWNLOAD_TAB_EMPTY = "download.tab.empty"
+
+    // --- 设置 ---
+
+    /** 侧栏入口：设置。 */
+    const val PANEL_SETTINGS = "panel.settings"
+
+    /** 设置页标题。 */
+    const val SETTINGS_TITLE = "settings.title"
+
+    /** 子菜单：开发者设置。 */
+    const val SETTINGS_DEV_TITLE = "settings.dev.title"
+
+    /** 子菜单入口：开发者设置。 */
+    const val SETTINGS_DEV_ENTRY = "settings.dev.entry"
+
+    /** 调试模式开关标签。 */
+    const val SETTINGS_DEBUG_MODE = "settings.debug.mode"
+
+    /** 调试模式说明。 */
+    const val SETTINGS_DEBUG_MODE_DESC = "settings.debug.mode.desc"
+
+    /** 调试模式需要重启才生效的提示。 */
+    const val SETTINGS_DEBUG_MODE_RESTART = "settings.debug.mode.restart"
+
+    /** 嘉豪终端按钮。 */
+    const val SETTINGS_CLI_TERMINAL = "settings.cli.terminal"
+
+    /** 嘉豪终端说明。 */
+    const val SETTINGS_CLI_TERMINAL_DESC = "settings.cli.terminal.desc"
+
+    /** 嘉豪终端：进入。 */
+    const val SETTINGS_CLI_ENTER = "settings.cli.enter"
+
+    /** 嘉豪终端页标题。 */
+    const val CLI_TERMINAL_TITLE = "cli.terminal.title"
+
+    /** 嘉豪终端：输入框提示。 */
+    const val CLI_TERMINAL_INPUT_HINT = "cli.terminal.input.hint"
+
+    /** 嘉豪终端：清空。 */
+    const val CLI_TERMINAL_CLEAR = "cli.terminal.clear"
+
+    /** 嘉豪终端：关闭终端。 */
+    const val CLI_TERMINAL_STOP = "cli.terminal.stop"
+
+    /** 嘉豪终端：返回。 */
+    const val CLI_TERMINAL_BACK = "cli.terminal.back"
+
+    /** 嘉豪终端：已停止。 */
+    const val CLI_TERMINAL_STOPPED = "cli.terminal.stopped"
+
+    /** 嘉豪终端：启动失败后重新启动。 */
+    const val CLI_TERMINAL_RETRY = "cli.terminal.retry"
 
     /** 首页左下角的启动按钮。 */
     const val HOME_LAUNCH = "home.launch"

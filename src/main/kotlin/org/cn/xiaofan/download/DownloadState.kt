@@ -285,9 +285,18 @@ class DownloadState internal constructor() {
      * <p>账号列表来自 `AuthService.accounts`，与账号切换界面读的是同一份数据。
      */
     private suspend fun checkAccess(): DownloadAccess = withContext(Dispatchers.IO) {
-        val microsoftAccounts = listMicrosoftAccounts()
+        // 读账号列表本身可能失败（容器未就绪、读盘出错、CDI 解析异常）。
+        // 这和「用户没登录」是完全不同的两件事，必须分开报 ——
+        // 否则用户会被引导去反复重登一个根本没问题的流程。
+        val microsoftAccounts = try {
+            listMicrosoftAccounts()
+        } catch (t: Throwable) {
+            errorDetail = "读取账号列表失败：${t.describeShort()}"
+            return@withContext DownloadAccess.Denied(DownloadAccess.DenyReason.UNEXPECTED)
+        }
+
         if (microsoftAccounts.isEmpty()) {
-            errorDetail = "没有任何微软正版账号"
+            errorDetail = "账号列表里没有微软正版账号"
             return@withContext DownloadAccess.Denied(DownloadAccess.DenyReason.NOT_MICROSOFT)
         }
 
@@ -408,12 +417,39 @@ class DownloadState internal constructor() {
      *
      * <p>用 `AuthService.accounts` 而不是遍历 {@link AccountGroup}：
      * 后者会带上默认离线账号 Steve，那不是用户登录过的账号。
+     *
+     * <h2>为什么异常不能吞成「空列表」</h2>
+     *
+     * 上一版是 `runCatching { ... }.getOrElse { emptyList() }`，
+     * 于是「容器没就绪 / 读盘失败 / CDI 解析出错」全都表现为空列表，
+     * 界面就报「你没有登录正版账号」—— 用户明明登录着，被这么一说
+     * 只会去反复重登，越试越糊涂。
+     *
+     * <p>现在把异常**往上抛**，由 [checkAccess] 归到
+     * [DownloadAccess.DenyReason.UNEXPECTED]，文案说「校验出错」而不是
+     * 「你没登录」。两种情况对用户的意义完全不同。
      */
-    private fun listMicrosoftAccounts(): List<Account> = runCatching {
-        HeadlessMcBootstrap.bean(AuthServiceAccess::class.java)
-            .accounts
-            .filter { it.isMicrosoftAccount }
-    }.getOrElse { emptyList() }
+    private fun listMicrosoftAccounts(): List<Account> {
+        val service = HeadlessMcBootstrap.bean(AuthServiceAccess::class.java)
+
+        // 诊断日志：每次校验都打出「总共几个账号、各是什么 provider」。
+        //
+        // 为什么要打：曾经出现过用户明明登录着微软号、界面却说没登录的情况。
+        // 上游链路（AuthServiceImpl.getAccounts → enabledProviders →
+        // McAuthProvider.getAccounts → authStore.stream）每一环都可能出问题，
+        // 只看结果分不清是「真的空」还是「被过滤掉了」。
+        // 这行日志能让下次复现时一眼看出卡在哪。
+        val all = service.accounts
+        if (all.isEmpty()) {
+            System.err.println("[HMWLX] 账号列表为空：AuthService.accounts 返回 0 条")
+        } else {
+            // 只打名字和 provider，不打 token —— 这是会进日志文件的内容。
+            val summary = all.joinToString(", ") { "${it.name}(${it.provider})" }
+            System.err.println("[HMWLX] 账号列表：$summary")
+        }
+
+        return all.filter { it.isMicrosoftAccount }
+    }
 
     /**
      * 读当前账号。
@@ -440,6 +476,15 @@ class DownloadState internal constructor() {
 private typealias AuthServiceAccess = io.github.headlesshq.headlessmc.auth.AuthService
 private typealias LastUsedAccountAccess =
     io.github.headlesshq.headlessmc.auth.LastUsedAccountService
+
+/**
+ * 把异常压成一句能塞进界面的话。
+ *
+ * <p>只取最外层 message，不拼整条 cause 链：这里要显示给用户看，
+ * 异常链留给日志。链太长会把界面撑爆，而且用户也读不懂。
+ */
+private fun Throwable.describeShort(): String =
+    message?.takeIf { it.isNotBlank() }?.take(160) ?: javaClass.simpleName
 
 /**
  * 创建并记住下载中心状态。

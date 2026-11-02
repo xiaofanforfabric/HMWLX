@@ -99,6 +99,7 @@ fun AccountBar(
                         text = profile.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     SourceBadge(profile.sourceLabel())
                 }

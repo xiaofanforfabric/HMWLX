@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,7 +51,9 @@ import org.cn.xiaofan.account.AuthPreflight
 import org.cn.xiaofan.account.blocksLaunch
 import org.cn.xiaofan.account.shouldWarn
 import org.cn.xiaofan.account.sourceLabel
+
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.config.AppConfig
 import org.cn.xiaofan.download.rememberDownloadState
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
@@ -68,8 +71,11 @@ import org.cn.xiaofan.ui.component.LaunchTransition
 import org.cn.xiaofan.ui.component.VersionDrawer
 import org.cn.xiaofan.ui.component.rememberLaunchAnimationState
 import org.cn.xiaofan.ui.screen.AccountSwitchScreen
+import org.cn.xiaofan.ui.screen.CliTerminalScreen
 import org.cn.xiaofan.ui.screen.DownloadCenterScreen
 import org.cn.xiaofan.ui.screen.LaunchingScreen
+import org.cn.xiaofan.ui.screen.SettingsScreen
+import org.cn.xiaofan.ui.screen.SettingsSection
 import org.cn.xiaofan.ui.screen.VersionListScreen
 import org.cn.xiaofan.version.rememberVersionState
 
@@ -142,6 +148,16 @@ fun HmwLxApp() {
 
     // 版本抽屉是否展开。
     var showVersionDrawer by remember { mutableStateOf(false) }
+
+    // 设置页当前在哪个子页。提到这一层而不是放在 SettingsScreen 内部：
+    // 用户切去别的面板再回来，应该回到上次看的子页，而不是重置成菜单。
+    var settingsSection by remember { mutableStateOf(SettingsSection.MENU) }
+
+    // 调试模式。初值从配置读一次，之后由界面改。
+    //
+    // 注意：这个开关**不影响本次运行** —— headlessmc 的日志级别在容器启动时
+    // 读一次就不再变。真正生效要等下次启动（见 HeadlessMcBootstrap）。
+    var debugMode by remember { mutableStateOf(AppConfig.isDebugMode()) }
 
     // 启动前的账号预检结果。非 null 时弹提示框。
     var authFailure by remember { mutableStateOf<AuthPreflight.Result?>(null) }
@@ -478,6 +494,31 @@ fun HmwLxApp() {
                                     MainPanel.DOWNLOAD -> DownloadCenterScreen(
                                         state = download,
                                     )
+
+                                    MainPanel.SETTINGS -> SettingsScreen(
+                                        section = settingsSection,
+                                        onSectionChange = { settingsSection = it },
+                                        debugMode = debugMode,
+                                        onDebugModeChange = { enabled ->
+                                            debugMode = enabled
+                                            // 写盘失败只是下次启动回到默认值，
+                                            // 不该弹窗打断用户 —— 记一行日志就够。
+                                            if (!AppConfig.setDebugMode(enabled)) {
+                                                println("[HMWLX] 调试模式写入配置失败")
+                                            }
+                                        },
+                                        onEnterCli = {
+                                            settingsSection = SettingsSection.CLI_TERMINAL
+                                        },
+                                        cliContent = {
+                                            CliTerminalScreen(
+                                                debugMode = debugMode,
+                                                onBack = {
+                                                    settingsSection = SettingsSection.DEVELOPER
+                                                },
+                                            )
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -720,6 +761,9 @@ private enum class MainPanel {
 
     /** 下载中心。需要有效微软正版账号，否则整页只有拒绝文案。 */
     DOWNLOAD,
+
+    /** 设置。内部还有子侧边菜单（目前是开发者设置）。 */
+    SETTINGS,
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +855,18 @@ private fun SideMenu(
                                 onSelectPanel(
                                     if (panel == MainPanel.DOWNLOAD) MainPanel.HOME
                                     else MainPanel.DOWNLOAD
+                                )
+                            },
+                        )
+
+                        MenuEntry(
+                            label = text(TextKey.PANEL_SETTINGS),
+                            icon = Icons.Filled.Settings,
+                            selected = panel == MainPanel.SETTINGS,
+                            onClick = {
+                                onSelectPanel(
+                                    if (panel == MainPanel.SETTINGS) MainPanel.HOME
+                                    else MainPanel.SETTINGS
                                 )
                             },
                         )

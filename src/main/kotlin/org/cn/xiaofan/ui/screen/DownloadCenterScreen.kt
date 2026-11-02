@@ -144,12 +144,38 @@ private fun CheckingView() {
 @Composable
 private fun DeniedView(state: DownloadState) {
     val denied = state.access as? DownloadAccess.Denied
-    val messageKey = when (denied?.reason) {
-        DownloadAccess.DenyReason.NETWORK_UNAVAILABLE -> TextKey.DOWNLOAD_NETWORK_UNAVAILABLE
-        DownloadAccess.DenyReason.RATE_LIMITED -> TextKey.DOWNLOAD_RATE_LIMITED
-        // 其余情况（没账号 / 凭据失效 / 未预期）统一用同一句：
-        // 对用户来说结论都一样 —— 现在没有可用正版账号。
-        else -> TextKey.DOWNLOAD_REQUIRE_MS_ACCOUNT
+    // 拒绝原因必须分开显示，不能用一句「你没登录」打发所有情况：
+    //
+    // | 原因 | 用户实际处境 | 该做什么 |
+    // |---|---|---|
+    // | NOT_MICROSOFT | 真的没登录微软号 | 去账号栏登录 |
+    // | CREDENTIAL_INVALID | 登录着，但令牌失效 | 重新登录**同一个**号 |
+    // | NETWORK_UNAVAILABLE | 号可能是好的，连不上微软 | 等网络恢复 |
+    // | RATE_LIMITED | 号可能是好的，被限流 | 等几分钟 |
+    // | UNEXPECTED | 我们没能完成校验 | 重启/看日志 |
+    //
+    // 全说成「你没登录」的话，后四种用户会去反复重登一个没问题的账号，
+    // 越试越糊涂 —— 这正是这次 bug 报告的场景。
+    val message = when (denied?.reason) {
+        DownloadAccess.DenyReason.NETWORK_UNAVAILABLE ->
+            text(TextKey.DOWNLOAD_NETWORK_UNAVAILABLE)
+
+        DownloadAccess.DenyReason.RATE_LIMITED ->
+            text(TextKey.DOWNLOAD_RATE_LIMITED)
+
+        DownloadAccess.DenyReason.CREDENTIAL_INVALID ->
+            text(TextKey.DOWNLOAD_CREDENTIAL_INVALID)
+
+        DownloadAccess.DenyReason.UNEXPECTED ->
+            Messages.get(
+                TextKey.DOWNLOAD_CHECK_ERROR,
+                state.errorDetail ?: "未知原因",
+            )
+
+        // 只有这两种才是真的「没有可用正版账号」。
+        DownloadAccess.DenyReason.NOT_MICROSOFT,
+        null,
+        -> text(TextKey.DOWNLOAD_REQUIRE_MS_ACCOUNT)
     }
 
     Box(
@@ -157,7 +183,7 @@ private fun DeniedView(state: DownloadState) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = text(messageKey),
+            text = message,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.error,
             textAlign = TextAlign.Center,
