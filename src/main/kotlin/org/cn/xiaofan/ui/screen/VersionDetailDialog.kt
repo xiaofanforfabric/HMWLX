@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -54,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -64,6 +66,8 @@ import org.cn.xiaofan.download.ModLoaderService
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.ui.component.VersionIconImage
+import org.cn.xiaofan.ui.component.VersionIcons
 
 /**
  * 版本详情弹窗：选安装方式（原版 / Fabric / Forge / NeoForge）+ 加载器构建。
@@ -163,6 +167,9 @@ fun VersionDetailDialog(
                     label = text(TextKey.DOWNLOAD_LOADER_VANILLA),
                     selected = selectedLoader == null,
                     enabled = !busy,
+                    // 原版用草方块：与版本列表里的原版图标一致。
+                    // 不填图标的话这一行会比下面几行短一截，视觉上参差不齐。
+                    icon = VersionIcons.RELEASE,
                     onSelect = {
                         selectedLoader = null
                         selectedBuild = null
@@ -225,6 +232,7 @@ fun VersionDetailDialog(
                                             "  (${support.builds.size})",
                                         selected = selectedLoader == support.loader,
                                         enabled = !busy,
+                                        icon = VersionIcons.iconFor(support.loader),
                                         onSelect = {
                                             selectedLoader = support.loader
                                             // 默认选最新构建：绝大多数用户不会去挑旧版本，
@@ -400,19 +408,23 @@ fun VersionDetailDialog(
     }
 }
 
-/** 单选项：安装方式的一行。 */
+/** 单选项：安装方式的一行。
+ *
+ * @param icon 图标资源路径；null 表示不显示（原版没有品牌图标）
+ */
 @Composable
 private fun LoaderOption(
     label: String,
     selected: Boolean,
     enabled: Boolean,
+    icon: String? = null,
     onSelect: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onSelect)
-            .heightIn(min = 36.dp),
+            .heightIn(min = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(
@@ -420,6 +432,16 @@ private fun LoaderOption(
             onClick = onSelect,
             enabled = enabled,
         )
+        // 图标尺寸 20dp 而不是 24：单选项本身高度就小，
+        // 图标太大反而会把文字挤下去。
+        if (icon != null) {
+            VersionIconImage(
+                resource = icon,
+                size = 20.dp,
+                filterQuality = FilterQuality.High,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
