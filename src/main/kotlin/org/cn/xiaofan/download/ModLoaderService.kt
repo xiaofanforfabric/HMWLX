@@ -202,22 +202,78 @@ object ModLoaderService {
     /**
      * 把 MC 版本换算成 NeoForge 的版本前缀。
      *
-     * @return 如 `1.21.4` -> `21.4.`；不可换算（远古版、快照、格式不符）返回 null
+     * <h2>这套规则比看上去复杂</h2>
+     *
+     * NeoForge 2023 年从 Forge 分叉，版本号规则**改过两次**，
+     * 而且 Minecraft 自己的版本号方案也在变。以下是核实过的对应关系：
+     *
+     * | MC 版本 | NeoForge 版本号 | 说明 |
+     * |---|---|---|
+     * | 1.20.1 | `47.1.x` | 沿用 Forge 47.x 的号，唯一特例 |
+     * | 1.20.2 ~ 1.21.11 | `20.2.x` ~ `21.11.x` | 三段：`<minor>.<patch>.<build>` |
+     * | **26.1 及以后** | `26.1.0.x` | **四段**：前三段是 MC 版本，第四段是构建号 |
+     *
+     * <p>最后一条来自 NeoForge 官方 26.1 发布说明原文：
+     * "NeoForge versions now have four components to match the new versioning
+     * system of Minecraft! The first three components identify the Minecraft
+     * version, the last the NeoForge release." —— 从这时起 MC 自己的版本号
+     * 也从 `1.21.4` 变成了 `26.1` 这种两段式。
+     *
+     * <p>前两版实现分别栽在这两处：先漏了 1.20.1 的 47.x 特例，
+     * 又假设 MC 版本永远是三段。所以这里对每个分支都写清依据。
+     *
+     * @return 版本前缀（如 `21.4.`、`26.1.0.`、`47.1.`）；不可换算返回 null
      */
     internal fun neoforgePrefix(vanillaVersion: String): String? {
-        // 只处理纯数字点分的正式版。快照（24w14a）、远古（a1.2.6）返回 null。
         val parts = vanillaVersion.split('.')
-        if (parts.size != 3) return null
+
+        // 快照（24w14a）、远古（a1.2.6）等非数字格式直接放弃。
         if (parts.any { it.toIntOrNull() == null }) return null
 
-        val major = parts[0].toIntOrNull() ?: return null
+        val nums = parts.mapNotNull { it.toIntOrNull() }
+
+        // ---- 新方案：两段式 MC 版本（26.1、26.3 …）----
+        //
+        // NeoForge 对应版本是四段：`26.1.0.10`、`26.3.0.101`。
+        // 官方说明：「前三段标识 MC 版本，第四段是 NeoForge 构建号」。
+        // 也就是说 MC `26.1` 对应 NeoForge 的 `26.1.0.<build>` —— 第三段是
+        // MC 的 hotfix 号，`26.1` 本身没有 hotfix 所以是 0。
+        //
+        // 前缀取三段 `26.1.0.` 而不是两段 `26.1.`：后者是 26.10.x 的子串，
+        // 会把 MC 26.10 的构建误算进 MC 26.1。
+        if (nums.size == 2) {
+            // 只有 26 以后才用两段式；`1.21` 这种两段写法是非法的 MC 版本。
+            return if (nums[0] >= 26) "${nums[0]}.${nums[1]}.0." else null
+        }
+
+        // ---- 中间过渡：三段式但已进入新方案（26.1.1 这类 MC hotfix）----
+        //
+        // 这一步是推断，未经实测确认。依据是官方「前三段标识 MC 版本」——
+        // 若 MC 出了 26.1.1，NeoForge 版本号应是 `26.1.1.<build>`。
+        // 由于建这个功能时 maven.neoforged.net 不可达，无法验证；
+        // 万一规则不同，最多表现为这个版本显示「不支持」，不会给出错误的
+        // 构建列表（前缀匹配不到就是空集）。宁可少列，不可错列。
+        if (nums.size == 3 && nums[0] >= 26) {
+            return "${nums[0]}.${nums[1]}.${nums[2]}."
+        }
+
+        // ---- 老方案：三段式 MC 版本（1.21.4 …）----
+        if (nums.size != 3) return null
+
+        val major = nums[0]
         // NeoForge 从 MC 1.20.1 才开始，主版本号必然是 1。
         if (major != 1) return null
 
-        val minor = parts[1].toIntOrNull() ?: return null
-        val patch = parts[2].toIntOrNull() ?: return null
-        // 1.20.1 是 NeoForge 的首个版本，之前的没有。
+        val minor = nums[1]
+        val patch = nums[2]
+
+        // 早于 1.20.1 的没有 NeoForge（那时它还是 Forge 的一部分）。
         if (minor < 20 || (minor == 20 && patch < 1)) return null
+
+        // 特例：1.20.1 沿用 Forge 的 47.1.x 版本号。
+        // NeoForge 首个发布版就叫 47.1.3，为了和 Forge 47.1.x 对应。
+        // 从 1.20.2 起才改成 <minor>.<patch>.<build>。
+        if (minor == 20 && patch == 1) return "47.1."
 
         return "$minor.$patch."
     }

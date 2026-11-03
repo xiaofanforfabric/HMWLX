@@ -43,14 +43,40 @@ class ModLoaderServiceTest {
 
     @Test
     fun `NeoForge 版本前缀换算`() {
-        // 正常正式版
-        assertEquals("21.4.", ModLoaderService.neoforgePrefix("1.21.4"))
-        assertEquals("20.1.", ModLoaderService.neoforgePrefix("1.20.1"))
-        assertEquals("21.1.", ModLoaderService.neoforgePrefix("1.21.1"))
+        // ---- 老方案：三段式 MC 版本 ----
+        // 1.20.1 是唯一特例，沿用 Forge 的 47.x 版本号
+        assertEquals("47.1.", ModLoaderService.neoforgePrefix("1.20.1"))
 
-        // NeoForge 从 1.20.1 才开始，更早的没有
+        // 1.20.2 起改成 <minor>.<patch>.<build>
+        assertEquals("20.2.", ModLoaderService.neoforgePrefix("1.20.2"))
+        assertEquals("21.4.", ModLoaderService.neoforgePrefix("1.21.4"))
+        assertEquals("21.1.", ModLoaderService.neoforgePrefix("1.21.1"))
+        assertEquals("21.11.", ModLoaderService.neoforgePrefix("1.21.11"))
+
+        // ---- 新方案：两段式 MC 版本（Mojang 从 26.1 起改的）----
+        //
+        // NeoForge 官方 26.1 说明：版本号变成四段，前三段标识 MC 版本，
+        // 第四段是构建号。例如 26.1.0.10-beta 对应 MC 26.1。
+        // 所以前缀必须带 "0."，否则 "26.1." 会误匹配 26.10.x。
+        assertEquals("26.1.0.", ModLoaderService.neoforgePrefix("26.1"))
+        assertEquals("26.3.0.", ModLoaderService.neoforgePrefix("26.3"))
+        // MC hotfix 版（若存在）：26.1.1 -> 26.1.1.<build>
+        assertEquals("26.1.1.", ModLoaderService.neoforgePrefix("26.1.1"))
+
+        // 关键反例：MC 26.10 不能被 26.1 的前缀误匹配。
+        // 这正是前缀取三段而不是两段的原因。
+        val p2610 = ModLoaderService.neoforgePrefix("26.10")
+        assertEquals("26.10.0.", p2610)
+        assertTrue(
+            !"26.10.0.5".startsWith("26.1.0."),
+            "26.10 的构建不应匹配 26.1 的前缀",
+        )
+
+        // ---- 不支持的情况 ----
+        // NeoForge 从 1.20.1 才开始
         assertNull(ModLoaderService.neoforgePrefix("1.19.4"))
         assertNull(ModLoaderService.neoforgePrefix("1.12.2"))
+        assertNull(ModLoaderService.neoforgePrefix("1.20.0"))
 
         // 远古版 / 快照 / 格式不符
         assertNull(ModLoaderService.neoforgePrefix("a1.2.6"))
