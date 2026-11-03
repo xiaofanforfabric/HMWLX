@@ -108,6 +108,31 @@ class ModLoaderServiceTest {
     }
 
     @Test
+    fun `旧版本不应被判为查询失败`() = runBlocking {
+        // Fabric 对不支持的 MC 版本返回 **HTTP 400 + body `[]`**，不是 404 也不是空 200。
+        // 实测：1.13.2 / 1.8.9 / 1.7.10 / 1.0 全部如此。
+        //
+        // 第一版实现把「非 2xx」一律当失败，结果用户在看 1.0 的详情页时
+        // 看到「Fabric 查询失败：HTTP 400」+ 一个永远点不好的重试按钮 ——
+        // 而正确语义是「不支持」，置灰即可，不该给重试。
+        for (version in listOf("1.0", "1.8.9", "1.12.2")) {
+            val results = ModLoaderService.querySupport(version)
+            val fabric = results.first { it.loaderOrNull() == ModLoaderService.Loader.FABRIC }
+            println("=== $version Fabric: ${describeSupport(fabric)} ===")
+
+            assertTrue(
+                fabric !is ModLoaderService.Support.Failed,
+                "$version 的 Fabric 不应是 Failed（400+[] 是「不支持」而非失败），" +
+                    "实际: ${describeSupport(fabric)}",
+            )
+            assertTrue(
+                fabric is ModLoaderService.Support.Unsupported,
+                "$version 的 Fabric 应为 Unsupported，实际: ${describeSupport(fabric)}",
+            )
+        }
+    }
+
+    @Test
     fun `Fabric 查询能区分不支持与网络失败`() = runBlocking {
         // 同一个加载器对「不存在的版本」和「网络断了」必须给出不同结果：
         //   不存在 -> Unsupported（界面置灰，用户不用重试）

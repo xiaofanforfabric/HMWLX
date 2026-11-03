@@ -26,6 +26,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.config.Json
 import java.net.HttpURLConnection
+import java.net.SocketException
 import java.net.URL
 import java.net.URLEncoder
 
@@ -99,6 +100,12 @@ object ModLoaderService {
         "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
 
     private const val TIMEOUT_MS = 15_000
+
+    /** 网络层瞬时失败的重试次数（含首次）。 */
+    private const val MAX_ATTEMPTS = 3
+
+    /** 重试间隔基数，实际间隔按次数递增。 */
+    private const val RETRY_DELAY_MS = 600L
 
     /**
      * 并行查询三个加载器对某个 MC 版本的支持情况。
@@ -217,7 +224,52 @@ object ModLoaderService {
 
     // ------------------------------------------------------------------ HTTP
 
+    /**
+     * 拉取文本，带重试。
+     *
+     * <p>`maven.minecraftforge.net` 经常在 TLS 握手阶段直接 reset 连接
+     * （实测 `Connection reset`，不是超时也不是 4xx）。这类瞬时失败
+     * 重试一次通常就好了，而让用户手动点「重新查询」体验很差。
+     *
+     * <p>只对**网络层异常**重试；HTTP 状态码错误（4xx/5xx）不重试 ——
+     * 那是服务端明确的答复，重试也只会得到同样结果。
+     */
     private fun fetchText(url: String): String {
+        var lastError: Exception? = null
+
+        repeat(MAX_ATTEMPTS) { attempt ->
+            try {
+                return fetchTextOnce(url)
+            } catch (e: SocketException) {
+                // Connection reset / Connection refused / Broken pipe
+                lastError = e
+                if (attempt < MAX_ATTEMPTS - 1) {
+                    // 退避一点点：立刻重连往往会撞上同一台后端
+                    runCatching { Thread.sleep(RETRY_DELAY_MS * (attempt + 1)) }
+                }
+            } catch (e: java.io.IOException) {
+                // 超时、TLS 握手失败等同样属于瞬时问题
+                lastError = e
+                if (attempt < MAX_ATTEMPTS - 1) {
+                    runCatching { Thread.sleep(RETRY_DELAY_MS * (attempt + 1)) }
+                }
+            }
+        }
+
+        throw lastError ?: IllegalStateException("请求失败：$url")
+    }
+
+    /**
+     * 拉取文本（单次尝试）。
+     *
+     * <p>非 2xx 时会读 body：**Fabric 用 `400` 表达「这个 MC 版本我没构建」**，
+     * body 是 `[]`。这是「不支持」而不是「查询失败」——
+     * 把它当失败会让用户在远古版上反复点重试，永远好不了。
+     *
+     * <p>判别规则：4xx + body 是空 JSON 数组 → 视为「没有数据」，
+     * 返回 `[]` 交给上层判为 Unsupported；其余非 2xx → 真失败。
+     */
+    private fun fetchTextOnce(url: String): String {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = TIMEOUT_MS
@@ -228,10 +280,31 @@ object ModLoaderService {
 
         try {
             val code = connection.responseCode
-            if (code !in 200..299) {
-                throw IllegalStateException("HTTP $code")
+            if (code in 200..299) {
+                return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             }
-            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+            // 非 2xx：先把 body 读出来再说。
+            // 注意要读 errorStream 而不是 inputStream —— 后者在 4xx/5xx 上会抛
+            // FileNotFoundException，拿不到 body。
+            val body = connection.errorStream
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText() }
+                ?.trim()
+                .orEmpty()
+
+            // 4xx + 空数组 = 服务端明确说「这个版本没有对应的东西」。
+            // Fabric 就是这么实现的（实测 1.13.2 / 1.8.9 / 1.0 均返回 400 + []）。
+            if (code in 400..499 && body == "[]") {
+                return "[]"
+            }
+
+            // 其它非 2xx 就是真失败，把 body 带上以便排查
+            // （限流、认证失败等都会带一段说明文字）。
+            throw IllegalStateException(
+                if (body.isEmpty()) "HTTP $code"
+                else "HTTP $code：${body.take(120)}",
+            )
         } finally {
             connection.disconnect()
         }
