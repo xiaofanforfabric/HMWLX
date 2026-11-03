@@ -559,7 +559,8 @@ fun HmwLxApp() {
                                                     settingsSection = SettingsSection.DEVELOPER
                                                 },
                                             )
-                                        },                                    )
+                                        },
+                                    )
                                 }
                             }
                         }

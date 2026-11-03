@@ -234,6 +234,28 @@ class DownloadState internal constructor() {
     }
 
     /**
+     * 触发重新查询的令牌。
+     *
+     * <p>为什么需要它：`invalidateLoaderSupport()` 只清了缓存，
+     * 但 Compose 不会因为 Map 变了就重跑 `LaunchedEffect(versionId)` ——
+     * key 没变。结果是用户点「重新查询」后界面毫无反应，得关掉弹窗
+     * 再打开才会动。
+     *
+     * <p>做法和下载中心的准入校验一样（那边是 `checkToken`）：
+     * 清缓存时一并自增令牌，界面的 effect 以令牌为 key 就会重跑。
+     * 只推进令牌、不自己 launch —— 否则令牌变化让 effect 重跑，
+     * effect 又推进令牌，互相触发。
+     */
+    var loaderSupportToken by mutableStateOf(0)
+        private set
+
+    /** 清缓存并请求重新查询。 */
+    fun retryLoaderSupport(versionId: String) {
+        invalidateLoaderSupport(versionId)
+        loaderSupportToken++
+    }
+
+    /**
      * 某个 MC 版本下，各加载器「附近可用的版本」。
      *
      * <p>NeoForge 只在部分 MC 版本上发版（21.6→1.21.6、21.9→1.21.9，

@@ -92,9 +92,13 @@ fun VersionDetailDialog(
 ) {
     val scope = rememberCoroutineScope()
 
-    // 进弹窗即查。key 用 versionId：关掉再打开同一版本时，
-    // DownloadState 的缓存会让 loadLoaderSupport 立刻返回。
-    LaunchedEffect(versionId) {
+    // 进弹窗即查。
+    //
+    // key 用 versionId + token：
+    //   - versionId 变化 = 换了个版本，当然要重查
+    //   - token 变化 = 用户点了「重新查询」，缓存已被清掉但 effect 的 key
+    //     没变就不重跑（这正是重试无效的原因，见 DownloadState.retryLoaderSupport）
+    LaunchedEffect(versionId, state.loaderSupportToken) {
         state.loadLoaderSupport(versionId)
         // 主查询完成后，再查邻近版本 —— 只为「不支持」的加载器服务，
         // 目的是告诉用户「那该用哪个版本」。
@@ -208,7 +212,7 @@ fun VersionDetailDialog(
                                 modifier = Modifier.padding(start = 12.dp, top = 2.dp),
                             )
                             TextButton(
-                                onClick = { state.invalidateLoaderSupport(versionId) },
+                                onClick = { state.retryLoaderSupport(versionId) },
                                 enabled = !busy,
                             ) {
                                 Text(text(TextKey.DOWNLOAD_LOADER_RETRY))
@@ -272,7 +276,7 @@ fun VersionDetailDialog(
                                                 isError = true,
                                             )
                                             TextButton(
-                                                onClick = { state.invalidateLoaderSupport(versionId) },
+                                                onClick = { state.retryLoaderSupport(versionId) },
                                                 enabled = !busy,
                                             ) {
                                                 Text(text(TextKey.DOWNLOAD_LOADER_RETRY))

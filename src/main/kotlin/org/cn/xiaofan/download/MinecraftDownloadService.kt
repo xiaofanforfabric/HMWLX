@@ -344,22 +344,45 @@ object MinecraftDownloadService {
                     }
                 }
 
-                // 带加载器：优先看差集。差集为空时，可能是重复安装（上游
-                // matcher 命中直接 return）—— 此时本地已有该版本，不算失败。
+                // 带加载器：上游装出来的版本名由各平台自己决定
+                // （Fabric = `fabric-loader-<build>-<mc>`，Forge = `<mc>-<forge>`），
+                // 所以不能拿 versionId 直接找。
+                //
+                // 判据按可靠性排序：
+                //   1. 名字里同时含加载器名与 MC 版本号，且是**装前没有的** —— 最准
+                //   2. 差集里唯一的那个 —— 准，但差集是 Set，多于一个时顺序不定
+                //   3. 本地本来就有（重复安装）—— 上游 matcher 命中后直接 return，
+                //      这种情况下必须找到它并如实回报，而不是谎报失败
+                //
+                // 不用 added.first()：Set 的迭代顺序不保证，同时新增两个时
+                // 会把错的版本名显示到界面上。
                 val added = now - before
-                when {
-                    added.isNotEmpty() -> InstallResult.Success(added.first())
+                val byName = added.firstOrNull {
+                    it.contains(loader.platformName, ignoreCase = true) &&
+                        it.contains(versionId)
+                }
 
-                    // 没新增，但本地版本数没变：多半是重复安装，上游幂等跳过了。
-                    // 具体是哪个只能靠名字猜（上游命名规则见各平台 installer），
-                    // 猜不到就如实说「没有变化」而不是谎报成功。
+                when {
+                    byName != null -> InstallResult.Success(byName)
+
+                    added.size == 1 -> InstallResult.Success(added.single())
+
+                    added.size > 1 -> {
+                        // 多个同时新增，靠名字也认不出。不猜：如实说「装完了，
+                        // 但分不清是哪个」，比报一个错的名字强。
+                        InstallResult.Success(
+                            added.sorted().joinToString(", "),
+                        )
+                    }
+
+                    // 没有新增 = 重复安装，上游幂等跳过了。
                     else -> {
-                        val guess = now.firstOrNull {
+                        val existing = now.firstOrNull {
                             it.contains(loader.platformName, ignoreCase = true) &&
                                 it.contains(versionId)
                         }
-                        if (guess != null) {
-                            InstallResult.Success(guess)
+                        if (existing != null) {
+                            InstallResult.Success(existing)
                         } else {
                             InstallResult.Failed(
                                 "安装流程结束了，但本地版本没有变化，也找不到 $versionId 的" +
