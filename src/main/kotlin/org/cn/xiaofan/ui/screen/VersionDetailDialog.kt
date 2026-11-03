@@ -177,45 +177,87 @@ fun VersionDetailDialog(
                     }
 
                     is DownloadState.LoaderSupportUi.Loaded -> {
-                        supportUi.supports.forEach { support ->
-                            when (support) {
-                                is ModLoaderService.Support.Available -> LoaderOption(
-                                    label = "${support.loader.displayName}" +
-                                        "  (${support.builds.size})",
-                                    selected = selectedLoader == support.loader,
-                                    enabled = !busy,
-                                    onSelect = {
-                                        selectedLoader = support.loader
-                                        // 默认选最新构建：绝大多数用户不会去挑旧版本，
-                                        // 让他们少点一次。
-                                        selectedBuild = support.builds.firstOrNull()
-                                    },
-                                )
+                        // 三个加载器**全部**失败时，几乎一定是本地网络问题
+                        // （DNS 污染 / 出口被墙 / 代理没生效），而不是
+                        // 「这三个加载器都不支持此版本」。
+                        //
+                        // 这两种情况在界面上必须区分开：
+                        // - 全部失败 -> 一条网络故障提示 + 一次重试，别刷三条错误
+                        // - 部分失败 -> 逐条显示，让用户知道哪个源不通
+                        val allFailed = supportUi.supports.all {
+                            it is ModLoaderService.Support.Failed
+                        }
 
-                                is ModLoaderService.Support.Unsupported -> LoaderUnavailable(
-                                    // 「不支持」是正常结果，不是错误 —— 用弱化色而不是红色。
-                                    label = Messages.get(
-                                        TextKey.DOWNLOAD_LOADER_UNSUPPORTED,
-                                        support.loader.displayName,
-                                        versionId,
-                                    ),
-                                    isError = false,
-                                )
+                        if (allFailed) {
+                            val firstReason = supportUi.supports
+                                .filterIsInstance<ModLoaderService.Support.Failed>()
+                                .firstOrNull()?.reason
+                                .orEmpty()
 
-                                is ModLoaderService.Support.Failed -> {
-                                    LoaderUnavailable(
-                                        label = Messages.get(
-                                            TextKey.DOWNLOAD_LOADER_FAILED,
-                                            support.loader.displayName,
-                                            support.reason,
-                                        ),
-                                        isError = true,
-                                    )
-                                    TextButton(
-                                        onClick = { state.invalidateLoaderSupport(versionId) },
+                            LoaderUnavailable(
+                                label = Messages.get(TextKey.DOWNLOAD_LOADERS_ALL_FAILED, firstReason),
+                                isError = true,
+                            )
+                            Text(
+                                text = text(TextKey.DOWNLOAD_LOADERS_ALL_FAILED_HINT),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 12.dp, top = 2.dp),
+                            )
+                            TextButton(
+                                onClick = { state.invalidateLoaderSupport(versionId) },
+                                enabled = !busy,
+                            ) {
+                                Text(text(TextKey.DOWNLOAD_LOADER_RETRY))
+                            }
+                        } else {
+                            supportUi.supports.forEach { support ->
+                                when (support) {
+                                    is ModLoaderService.Support.Available -> LoaderOption(
+                                        label = "${support.loader.displayName}" +
+                                            "  (${support.builds.size})",
+                                        selected = selectedLoader == support.loader,
                                         enabled = !busy,
-                                    ) {
-                                        Text(text(TextKey.DOWNLOAD_LOADER_RETRY))
+                                        onSelect = {
+                                            selectedLoader = support.loader
+                                            // 默认选最新构建：绝大多数用户不会去挑旧版本，
+                                            // 让他们少点一次。
+                                            selectedBuild = support.builds.firstOrNull()
+                                        },
+                                    )
+
+                                    is ModLoaderService.Support.Unsupported -> LoaderUnavailable(
+                                        // 「不支持」是正常结果，不是错误 —— 用弱化色而不是红色。
+                                        label = Messages.get(
+                                            TextKey.DOWNLOAD_LOADER_UNSUPPORTED,
+                                            support.loader.displayName,
+                                            versionId,
+                                        ),
+                                        isError = false,
+                                    )
+
+                                    is ModLoaderService.Support.Failed -> {
+                                        // 部分失败：只列一次重试按钮，不每个加载器都给一个 ——
+                                        // 三个红字加三个重试按钮太吵。
+                                        if (support == supportUi.supports
+                                                .filterIsInstance<ModLoaderService.Support.Failed>()
+                                                .first()
+                                        ) {
+                                            LoaderUnavailable(
+                                                label = Messages.get(
+                                                    TextKey.DOWNLOAD_LOADER_FAILED,
+                                                    support.loader.displayName,
+                                                    support.reason,
+                                                ),
+                                                isError = true,
+                                            )
+                                            TextButton(
+                                                onClick = { state.invalidateLoaderSupport(versionId) },
+                                                enabled = !busy,
+                                            ) {
+                                                Text(text(TextKey.DOWNLOAD_LOADER_RETRY))
+                                            }
+                                        }
                                     }
                                 }
                             }

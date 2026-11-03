@@ -284,6 +284,12 @@ object TextKey {
     /** 详情页：加载器查询失败。`{0}` 名称，`{1}` 原因。 */
     const val DOWNLOAD_LOADER_FAILED = "download.loader.failed"
 
+    /** 详情页：三个加载器全部查询失败。`{0}` 第一个失败的原因。 */
+    const val DOWNLOAD_LOADERS_ALL_FAILED = "download.loaders.all.failed"
+
+    /** 详情页：全部失败时的排查提示。 */
+    const val DOWNLOAD_LOADERS_ALL_FAILED_HINT = "download.loaders.all.failed.hint"
+
     /** 详情页：重试查询加载器。 */
     const val DOWNLOAD_LOADER_RETRY = "download.loader.retry"
 
