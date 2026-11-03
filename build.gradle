@@ -49,6 +49,26 @@ dependencies {
     //      被 PaperVersionService / PurpurVersionService 继承（必须扫继承链才查得到）
     implementation 'com.github.xiaofanforfabric:headlessmc:0df01d2043'
 
+    // 模组加载器平台。
+    //
+    // 聚合包 headlessmc 只带 vanilla —— 其余平台是独立 artifact，必须显式声明，
+    // 否则 PlatformService.getPlatforms() 里永远只有原版。
+    //
+    // 三个客户端加载器（服务端的 paper/purpur 对 GUI 没用，不引入）：
+    //   fabric    —— 走 Fabric meta API，getBuilds(vanillaVersion) 查某 MC 版本下的构建
+    //   forge     —— 有专门的 ForgeCLIInstaller，安装流程和另外两个不同
+    //   neoforge  —— Forge 的 1.20.1+ 分叉
+    //
+    // 引入 jar 还不够，还要在 application.properties 里加 index-dependency，
+    // 否则它们的 @ApplicationScoped Factory 不会被 ArC 索引（同 auth 那几个模块的坑）。
+    implementation 'com.github.xiaofanforfabric.headlessmc:headlessmc-platform-fabric:0df01d2043'
+    implementation 'com.github.xiaofanforfabric.headlessmc:headlessmc-platform-forge:0df01d2043'
+    implementation 'com.github.xiaofanforfabric.headlessmc:headlessmc-platform-neoforge:0df01d2043'
+
+    // Forge 的安装器依赖这个（ForgeCLIInstaller 需要它下载并执行官方 installer）。
+    // 它不在 headlessmc 的聚合包里，需要单独引。
+    implementation 'com.github.xiaofanforfabric.headlessmc:headlessmc-forge-installer:0df01d2043'
+
     // headlessmc-auth-impl 通过传递依赖引入 minecraftauth，但 JitPack 发布的元数据
     // 里它的作用域不保证是 compile，Kotlin 编译期看不到 MsaDeviceCode 等类型。
     // 这里显式声明运行时同版本（5.0.2，与 headlessmc 0df01d2043 拉下来的一致），

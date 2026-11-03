@@ -68,6 +68,22 @@ object AppConfig {
     const val KEY_DEBUG_MODE = "DEBUG_MODE"
 
     /**
+     * 代理地址，形如 `http://127.0.0.1:7890`。
+     *
+     * <p>为空表示「没在界面里设过」，此时 [ProxyConfig] 会回落到环境变量。
+     * 设了就以这里为准 —— 用户既然在界面里填了，说明他明确要这个。
+     */
+    const val KEY_PROXY_URL = "PROXY_URL"
+
+    /**
+     * 是否禁用代理。
+     *
+     * <p>`true` 时即使环境变量里有 `https_proxy` 也不使用。
+     * 用途：终端里导出了代理变量，但用户希望 HMWLX 直连（比如代理挂了）。
+     */
+    const val KEY_PROXY_DISABLED = "PROXY_DISABLED"
+
+    /**
      * 测试专用的目录覆盖。设为非空时，[configFile] 直接用它，不再按平台推。
      *
      * 生产环境保持 `null`。这样测试不用去反射改 `XDG_CONFIG_HOME`——
@@ -110,6 +126,44 @@ object AppConfig {
     fun setDebugMode(enabled: Boolean): Boolean = setBoolean(KEY_DEBUG_MODE, enabled)
 
     /**
+     * 读取界面上设置的代理地址。
+     *
+     * <p>返回 `null` 表示「没设过」（缺失或空串），此时应由
+     * [ProxyConfig] 回落到环境变量 —— 而不是当成「直连」。
+     * 这个区别很重要：把空串当直连会让环境变量里的代理失效。
+     */
+    fun getProxyUrl(): String? {
+        val file = configFile() ?: return null
+        return runCatching { readAll(file)[KEY_PROXY_URL] }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 设置代理地址。
+     *
+     * @param url 形如 `http://127.0.0.1:7890`；传 `null` 或空串表示清除设置
+     * @return 写入是否成功
+     */
+    fun setProxyUrl(url: String?): Boolean = setString(KEY_PROXY_URL, url?.trim().orEmpty())
+
+    /**
+     * 读取「是否禁用代理」。
+     *
+     * <p>读不到时返回 `false`（不禁用）：默认应该尊重环境变量，
+     * 用户显式关掉才不走代理。
+     */
+    fun isProxyDisabled(): Boolean {
+        val file = configFile() ?: return false
+        return runCatching { readAll(file)[KEY_PROXY_DISABLED]?.toBooleanStrictOrNull() ?: false }
+            .getOrDefault(false)
+    }
+
+    /** 设置「是否禁用代理」。 */
+    fun setProxyDisabled(disabled: Boolean): Boolean = setBoolean(KEY_PROXY_DISABLED, disabled)
+
+    /**
      * 记录用户已同意协议。
      *
      * 只改动 [KEY_LEGAL] 一项，其余已有的键原样保留 —— 用户可能手工往里加过东西，
@@ -129,11 +183,21 @@ object AppConfig {
      * @return 写入是否成功。失败不抛异常：配置写不进去不该让用户用不了软件，
      *         最多是下次启动回到默认值。
      */
-    private fun setBoolean(key: String, value: Boolean): Boolean {
+    private fun setBoolean(key: String, value: Boolean): Boolean =
+        setString(key, value.toString())
+
+    /**
+     * 写入一个字符串配置项。
+     *
+     * <p>只改这一项，其余已有的键原样保留。
+     *
+     * @return 写入是否成功。失败不抛异常。
+     */
+    private fun setString(key: String, value: String): Boolean {
         val file = configFile() ?: return false
         return runCatching {
             val existing = if (file.isFile) readAll(file) else LinkedHashMap()
-            existing[key] = value.toString()
+            existing[key] = value
             writeAll(file, existing)
             true
         }.getOrDefault(false)

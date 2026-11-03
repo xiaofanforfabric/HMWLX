@@ -257,6 +257,52 @@ object TextKey {
     /** 下载按钮。 */
     const val DOWNLOAD_ACTION = "download.action"
 
+    /** 列表行按钮：打开详情页（原来是「下载」二字）。 */
+    const val DOWNLOAD_DETAILS = "download.details"
+
+    /** 详情页：标题。 */
+    const val DOWNLOAD_DETAIL_TITLE = "download.detail.title"
+
+    /** 详情页：关闭。 */
+    const val DOWNLOAD_DETAIL_CLOSE = "download.detail.close"
+
+    /** 详情页：「安装方式」分组标题。 */
+    const val DOWNLOAD_CHOOSE_LOADER = "download.choose.loader"
+
+    /** 详情页：原版选项。 */
+    const val DOWNLOAD_LOADER_VANILLA = "download.loader.vanilla"
+
+    /** 详情页：加载器版本选择标题。 */
+    const val DOWNLOAD_CHOOSE_BUILD = "download.choose.build"
+
+    /** 详情页：加载器正在查询。 */
+    const val DOWNLOAD_LOADER_LOADING = "download.loader.loading"
+
+    /** 详情页：加载器不支持这个版本。`{0}` 为加载器名，`{1}` 为 MC 版本。 */
+    const val DOWNLOAD_LOADER_UNSUPPORTED = "download.loader.unsupported"
+
+    /**
+     * 详情页：加载器不支持这个版本，但邻近版本有。
+     * `{0}` 加载器名，`{1}` 当前 MC 版本，`{2}` 建议的 MC 版本。
+     */
+    const val DOWNLOAD_LOADER_UNSUPPORTED_WITH_NEARBY =
+        "download.loader.unsupported.nearby"
+
+    /** 详情页：加载器查询失败。`{0}` 名称，`{1}` 原因。 */
+    const val DOWNLOAD_LOADER_FAILED = "download.loader.failed"
+
+    /** 详情页：三个加载器全部查询失败。`{0}` 第一个失败的原因。 */
+    const val DOWNLOAD_LOADERS_ALL_FAILED = "download.loaders.all.failed"
+
+    /** 详情页：全部失败时的排查提示。 */
+    const val DOWNLOAD_LOADERS_ALL_FAILED_HINT = "download.loaders.all.failed.hint"
+
+    /** 详情页：重试查询加载器。 */
+    const val DOWNLOAD_LOADER_RETRY = "download.loader.retry"
+
+    /** 详情页：最新构建标记。 */
+    const val DOWNLOAD_LOADER_LATEST = "download.loader.latest"
+
     /** 下载中。`{0}` 为版本号。 */
     const val DOWNLOAD_INSTALLING = "download.installing"
 
@@ -305,6 +351,60 @@ object TextKey {
 
     /** 子菜单入口：开发者设置。 */
     const val SETTINGS_DEV_ENTRY = "settings.dev.entry"
+
+    /** 侧栏：网络设置入口。 */
+    const val SETTINGS_NETWORK_ENTRY = "settings.network.entry"
+
+    /** 网络设置页标题。 */
+    const val SETTINGS_NETWORK_TITLE = "settings.network.title"
+
+    /** 网络设置：当前生效状态标签。 */
+    const val SETTINGS_NETWORK_CURRENT = "settings.network.current"
+
+    /** 代理地址字段标题。 */
+    const val SETTINGS_PROXY_URL = "settings.proxy.url"
+
+    /** 代理地址说明。 */
+    const val SETTINGS_PROXY_URL_DESC = "settings.proxy.url.desc"
+
+    /** 代理地址输入框占位符。 */
+    const val SETTINGS_PROXY_URL_HINT = "settings.proxy.url.hint"
+
+    /** 代理地址格式错误提示。 */
+    const val SETTINGS_PROXY_URL_INVALID = "settings.proxy.url.invalid"
+
+    /** 保存按钮。 */
+    const val SETTINGS_PROXY_SAVE = "settings.proxy.save"
+
+    /** 撤销修改按钮。 */
+    const val SETTINGS_PROXY_RESET = "settings.proxy.reset"
+
+    /** 禁用代理开关标题。 */
+    const val SETTINGS_PROXY_DISABLE = "settings.proxy.disable"
+
+    /** 禁用代理开关说明。 */
+    const val SETTINGS_PROXY_DISABLE_DESC = "settings.proxy.disable.desc"
+
+    /** 当前状态：直连（主动禁用）。 */
+    const val SETTINGS_PROXY_DIRECT_DISABLED = "settings.proxy.direct.disabled"
+
+    /** 当前状态：直连（未配置且无环境变量）。 */
+    const val SETTINGS_PROXY_DIRECT_NO_ENV = "settings.proxy.direct.noenv"
+
+    /** 代理来源：配置文件。 */
+    const val SETTINGS_PROXY_SOURCE_CONFIG = "settings.proxy.source.config"
+
+    /** 代理来源：环境变量。 */
+    const val SETTINGS_PROXY_SOURCE_ENV = "settings.proxy.source.env"
+
+    /** 代理来源：直连。 */
+    const val SETTINGS_PROXY_SOURCE_DIRECT = "settings.proxy.source.direct"
+
+    /** 代理风险提示。 */
+    const val SETTINGS_PROXY_SECURITY = "settings.proxy.security"
+
+    /** 代理修改后需重启。 */
+    const val SETTINGS_PROXY_RESTART = "settings.proxy.restart"
 
     /** 调试模式开关标签。 */
     const val SETTINGS_DEBUG_MODE = "settings.debug.mode"

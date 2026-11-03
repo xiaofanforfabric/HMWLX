@@ -174,8 +174,10 @@ class DownloadState internal constructor() {
 
     /** 下载中状态。 */
     data class InstallingUi(
-        /** 正在下载的版本号。 */
+        /** 正在下载的 MC 版本号（不带加载器修饰），列表用它匹配高亮。 */
         val versionId: String,
+        /** 带加载器修饰的展示文案，如 `Fabric 0.16.9 / 1.21.4`。 */
+        val label: String,
         /** 当前阶段描述，来自上游的进度回调。 */
         val stage: String,
     )
@@ -188,6 +190,111 @@ class DownloadState internal constructor() {
     sealed interface InstallOutcome {
         data class Success(val versionId: String) : InstallOutcome
         data class Failed(val versionId: String, val reason: String) : InstallOutcome
+    }
+
+    /**
+     * 某个 MC 版本的加载器支持情况（详情页用）。
+     *
+     * <p>缓存键是 MC 版本号：用户可能来回切详情页，重复查三次 API 没意义。
+     * 不设过期 —— 加载器对某个已发布 MC 版本的构建列表基本不再变（
+     * Fabric 会追加新 loader 版本，但那不影响「支不支持」这个判断）。
+     */
+    var loaderSupport by mutableStateOf<Map<String, LoaderSupportUi>>(emptyMap())
+        private set
+
+    /** 加载器查询的界面状态。 */
+    sealed interface LoaderSupportUi {
+        /** 正在查询三个加载器。 */
+        data object Loading : LoaderSupportUi
+
+        /** 查询完成。每个加载器一条，顺序与 [ModLoaderService.Loader.entries] 一致。 */
+        data class Loaded(val supports: List<ModLoaderService.Support>) : LoaderSupportUi
+    }
+
+    /**
+     * 查询某个 MC 版本的加载器支持情况（带缓存）。
+     *
+     * <p>并行查三个加载器，见 [ModLoaderService.querySupport]。
+     * 重复调用已查询过的版本会直接返回 —— 调用方不需要自己判重。
+     */
+    suspend fun loadLoaderSupport(versionId: String) {
+        if (loaderSupport[versionId] is LoaderSupportUi.Loaded) return
+
+        loaderSupport = loaderSupport + (versionId to LoaderSupportUi.Loading)
+
+        val supports = ModLoaderService.querySupport(versionId)
+
+        loaderSupport = loaderSupport + (versionId to LoaderSupportUi.Loaded(supports))
+    }
+
+    /** 清掉某个版本的加载器缓存，让下次进入详情页重新查（网络失败后用）。 */
+    fun invalidateLoaderSupport(versionId: String) {
+        loaderSupport = loaderSupport - versionId
+        nearbySupport = nearbySupport - versionId
+    }
+
+    /**
+     * 触发重新查询的令牌。
+     *
+     * <p>为什么需要它：`invalidateLoaderSupport()` 只清了缓存，
+     * 但 Compose 不会因为 Map 变了就重跑 `LaunchedEffect(versionId)` ——
+     * key 没变。结果是用户点「重新查询」后界面毫无反应，得关掉弹窗
+     * 再打开才会动。
+     *
+     * <p>做法和下载中心的准入校验一样（那边是 `checkToken`）：
+     * 清缓存时一并自增令牌，界面的 effect 以令牌为 key 就会重跑。
+     * 只推进令牌、不自己 launch —— 否则令牌变化让 effect 重跑，
+     * effect 又推进令牌，互相触发。
+     */
+    var loaderSupportToken by mutableStateOf(0)
+        private set
+
+    /** 清缓存并请求重新查询。 */
+    fun retryLoaderSupport(versionId: String) {
+        invalidateLoaderSupport(versionId)
+        loaderSupportToken++
+    }
+
+    /**
+     * 某个 MC 版本下，各加载器「附近可用的版本」。
+     *
+     * <p>NeoForge 只在部分 MC 版本上发版（21.6→1.21.6、21.9→1.21.9，
+     * 中间的 1.21.7/1.21.8 直接跳过）。用户看到「不支持」时最想知道
+     * 「那我该用哪个」，所以这里缓存邻近版本的查询结果。
+     *
+     * <p>值形如 `1.21.6`；null 表示附近也没有。
+     */
+    var nearbySupport by mutableStateOf<Map<String, Map<ModLoaderService.Loader, String?>>>(emptyMap())
+        private set
+
+    /**
+     * 查询某个版本下不可用加载器的邻近可用版本。
+     *
+     * <p>只对 `Unsupported` 的加载器查 —— `Available` 的不需要，
+     * `Failed` 的查了也没意义（网络本身就不通）。
+     */
+    suspend fun loadNearbySupport(versionId: String) {
+        val loaded = loaderSupport[versionId] as? LoaderSupportUi.Loaded ?: return
+        if (nearbySupport.containsKey(versionId)) return
+
+        val unsupported = loaded.supports
+            .filterIsInstance<ModLoaderService.Support.Unsupported>()
+            .map { it.loader }
+
+        if (unsupported.isEmpty()) {
+            nearbySupport = nearbySupport + (versionId to emptyMap())
+            return
+        }
+
+        val result = mutableMapOf<ModLoaderService.Loader, String?>()
+        for (loader in unsupported) {
+            // 先往旧版本找，再往新版本找：用户手上可能已经有旧版本的整合包，
+            // 而新版本往往还没出。
+            result[loader] = ModLoaderService.findNearbySupport(loader, versionId, step = -1)
+                ?: ModLoaderService.findNearbySupport(loader, versionId, step = +1)
+        }
+
+        nearbySupport = nearbySupport + (versionId to result)
     }
 
     /** 关闭结果提示。 */
@@ -235,13 +342,40 @@ class DownloadState internal constructor() {
      * <p>同样只允许放行态调用 —— 这是最后一道闸，界面层不该是唯一的守卫。
      */
     suspend fun install(versionId: String) {
+        installWith(versionId, loader = null, build = null)
+    }
+
+    /**
+     * 下载并安装指定加载器 + 构建的版本。
+     *
+     * <p>与原版安装共用同一套状态机：同时只允许一个下载、成功才推
+     * [localVersionsToken]。区别只在于装出来的版本名由上游决定
+     * （如 `fabric-loader-0.16.9-1.21.4`），所以 [InstallOutcome.Success]
+     * 里带的是**上游实际装出来的版本名**，不是用户点的版本号。
+     *
+     * @param loader 加载器；null 表示原版
+     * @param build 加载器构建标识；null 表示让上游挑最新
+     */
+    suspend fun installWith(
+        versionId: String,
+        loader: ModLoaderService.Loader?,
+        build: String?,
+    ) {
         if (access !is DownloadAccess.Allowed) return
         if (installing != null) return
 
-        installing = InstallingUi(versionId = versionId, stage = "准备中…")
+        // 界面上显示的名字：带加载器时要写清楚装的是哪个组合，
+        // 否则用户看到「正在下载 1.21.4」会以为在下原版。
+        val label = if (loader == null) {
+            versionId
+        } else {
+            "${loader.displayName} $build / $versionId"
+        }
+
+        installing = InstallingUi(versionId = versionId, label = label, stage = "准备中…")
         installResult = null
 
-        val result = MinecraftDownloadService.install(versionId) { stage ->
+        val result = MinecraftDownloadService.installWith(versionId, loader, build) { stage ->
             // 进度回调在 IO 线程上触发，写 Compose 状态是线程安全的
             // （mutableStateOf 的写入会被转发到主线程的快照系统）。
             installing = installing?.copy(stage = stage)
@@ -256,7 +390,7 @@ class DownloadState internal constructor() {
             }
 
             is MinecraftDownloadService.InstallResult.Failed ->
-                InstallOutcome.Failed(versionId, result.reason)
+                InstallOutcome.Failed(label, result.reason)
         }
     }
 

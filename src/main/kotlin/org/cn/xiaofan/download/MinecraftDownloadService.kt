@@ -217,7 +217,7 @@ object MinecraftDownloadService {
      *
      * <p>所以重复点同一个版本一般不会重下几百 MB。但上游返回的 `Version`
      * 没有可靠的「本次是否真的写盘了」标志，我们**不猜**：装完后真的去本地
-     * 扫一遍，扫到才报成功（见 [verifyInstalled]）。
+     * 扫一遍，扫到才报成功（见 [verifyInstalledAfter]）。
      *
      * @param versionId 版本号，如 `1.21.4`
      * @param onProgress 进度回调，参数是当前阶段的描述文字。下载耗时较长，
@@ -226,17 +226,57 @@ object MinecraftDownloadService {
     suspend fun install(
         versionId: String,
         onProgress: (String) -> Unit = {},
+    ): InstallResult = installWith(versionId, loader = null, build = null, onProgress = onProgress)
+
+    /**
+     * 安装指定加载器 + 构建的版本。
+     *
+     * <h2>和原版安装的区别</h2>
+     *
+     * 原版只需要版本号；带加载器时还要给 `platform` 和 `build`，
+     * 因为同一个 MC 版本下可能有很多加载器构建（Fabric 0.16.9、0.16.8…）。
+     *
+     * `VersionArg.withPlatform("fabric").withBuild("0.16.9")` 表达的就是
+     * 「fabric 加载器、构建 0.16.9、针对版本 X」。
+     *
+     * <h2>为什么校验版本号不能沿用原版那套</h2>
+     *
+     * 原版安装后本地多出一个叫 `1.21.4` 的目录。但 Fabric 装出来的是
+     * **另一个版本**，名字由上游决定（通常形如 `fabric-loader-0.16.9-1.21.4`），
+     * 不是 `1.21.4`。所以不能拿 `versionId` 去本地扫 —— 得用上游返回的
+     * `Version` 对象里能确定的标识去扫，扫不到就退化为「只要本地版本数变多了
+     * 就算成功」，并且明确告诉用户装出来叫什么。
+     *
+     * @param loader 加载器；null 表示原版
+     * @param build 加载器构建标识；`loader != null` 时应给出，
+     *   null 表示让上游自己挑最新
+     */
+    suspend fun installWith(
+        versionId: String,
+        loader: ModLoaderService.Loader?,
+        build: String?,
+        onProgress: (String) -> Unit = {},
     ): InstallResult = withContext(Dispatchers.IO) {
         runCatching {
             val platformService = HeadlessMcBootstrap.bean(PlatformService::class.java)
 
             onProgress("正在解析版本 $versionId …")
 
-            // 构造 VersionArg 时显式指定 platform=vanilla 与 side=client。
+            // 构造 VersionArg 时显式指定 side=client。
             // 不指定 platform 时上游会按自己的默认值走，不同版本默认值可能不同，
             // 显式写死可以避免升级后行为漂移。
-            val arg = VersionArg.parse(listOf(versionId))
+            //
+            // 带加载器时再补 platform 和 build —— 顺序有讲究：
+            // 先 withPlatform 再 withBuild，与上游 builder 的字段语义一致。
+            var arg = VersionArg.parse(listOf(versionId))
                 .withSide(io.github.headlesshq.headlessmc.version.arg.Side.CLIENT)
+
+            if (loader != null) {
+                arg = arg.withPlatform(loader.platformName)
+                if (build != null) {
+                    arg = arg.withBuild(build)
+                }
+            }
 
             val id = VersionID.resolve(platformService, arg)
             val platform: Platform = id.platform
@@ -247,24 +287,116 @@ object MinecraftDownloadService {
                 }
 
             val dir: Path = GameVersionService.resolveGameDir().toPath()
-            onProgress("正在下载 $versionId 到 $dir …")
+            val what = if (loader == null) versionId else "${loader.displayName} $build / $versionId"
+            onProgress("正在下载 $what 到 $dir …")
+
+            // 装之前先记下本地已有版本，用于装完之后判断「多了什么」。
+            // 原版可以直接按版本号扫，但加载器装出来的名字上游自有规则，
+            // 差集是唯一可靠的办法。
+            val before = scanVersionIds()
 
             // 空 TypedMap = 不强装、不用自定义 URL。
             // 如果以后要支持「重新下载」，在这里 put FORCE_INSTALL=true。
-            // 不接返回值：上游返回的 Version 没有稳定的版本号取值方法，
-            // 而且 VersionID.toString() 给的是 VersionArg 的标识串
-            // （形如 client/vanilla/1.21.4），直接显示会让用户以为出错。
-            // 该版本号就是用户点的那个，直接用它最可靠。
             installer.installClient(id, dir, TypedMapImpl())
 
-            // 上游没抛异常不等于「装好了」—— 它可能根本没动文件。
-            // 真的去本地扫一遍，扫到才敢说成功。
             onProgress("正在确认安装结果 …")
-            verifyInstalled(versionId, dir)
+            verifyInstalledAfter(versionId, loader, before, dir)
         }.fold(
             onSuccess = { it },
             onFailure = { InstallResult.Failed(it.describe()) },
         )
+    }
+
+    /** 扫出本地全部版本号；扫描失败返回空集（只用于算差集，不必报错）。 */
+    private suspend fun scanVersionIds(): Set<String> =
+        when (val found = GameVersionService.scan()) {
+            is GameVersionService.VersionScanResult.Success -> found.versions.map { it.id }.toSet()
+            is GameVersionService.VersionScanResult.Failed -> emptySet()
+        }
+
+    /**
+     * 装完后的确认。
+     *
+     * <p>两条路径：
+     * - **原版**：直接查本地有没有 [versionId]，与旧逻辑一致。
+     * - **带加载器**：上游装出来的版本名不是 [versionId]（Fabric 是
+     *   `fabric-loader-<build>-<mc>`），所以用「装前装后的差集」判断新增了
+     *   哪个版本，并把那个名字回报给界面 —— 用户需要知道它叫什么。
+     */
+    private suspend fun verifyInstalledAfter(
+        versionId: String,
+        loader: ModLoaderService.Loader?,
+        before: Set<String>,
+        dir: Path,
+    ): InstallResult = withContext(Dispatchers.IO) {
+        when (val found = GameVersionService.scan()) {
+            is GameVersionService.VersionScanResult.Success -> {
+                val now = found.versions.map { it.id }.toSet()
+
+                if (loader == null) {
+                    return@withContext if (versionId in now) {
+                        InstallResult.Success(versionId)
+                    } else {
+                        InstallResult.Failed(
+                            "安装流程结束了，但在 $dir 里找不到版本 $versionId。" +
+                                "可能是磁盘权限或上游安装器异常，请查看日志。",
+                        )
+                    }
+                }
+
+                // 带加载器：上游装出来的版本名由各平台自己决定
+                // （Fabric = `fabric-loader-<build>-<mc>`，Forge = `<mc>-<forge>`），
+                // 所以不能拿 versionId 直接找。
+                //
+                // 判据按可靠性排序：
+                //   1. 名字里同时含加载器名与 MC 版本号，且是**装前没有的** —— 最准
+                //   2. 差集里唯一的那个 —— 准，但差集是 Set，多于一个时顺序不定
+                //   3. 本地本来就有（重复安装）—— 上游 matcher 命中后直接 return，
+                //      这种情况下必须找到它并如实回报，而不是谎报失败
+                //
+                // 不用 added.first()：Set 的迭代顺序不保证，同时新增两个时
+                // 会把错的版本名显示到界面上。
+                val added = now - before
+                val byName = added.firstOrNull {
+                    it.contains(loader.platformName, ignoreCase = true) &&
+                        it.contains(versionId)
+                }
+
+                when {
+                    byName != null -> InstallResult.Success(byName)
+
+                    added.size == 1 -> InstallResult.Success(added.single())
+
+                    added.size > 1 -> {
+                        // 多个同时新增，靠名字也认不出。不猜：如实说「装完了，
+                        // 但分不清是哪个」，比报一个错的名字强。
+                        InstallResult.Success(
+                            added.sorted().joinToString(", "),
+                        )
+                    }
+
+                    // 没有新增 = 重复安装，上游幂等跳过了。
+                    else -> {
+                        val existing = now.firstOrNull {
+                            it.contains(loader.platformName, ignoreCase = true) &&
+                                it.contains(versionId)
+                        }
+                        if (existing != null) {
+                            InstallResult.Success(existing)
+                        } else {
+                            InstallResult.Failed(
+                                "安装流程结束了，但本地版本没有变化，也找不到 $versionId 的" +
+                                    "${loader.displayName} 版本。请查看日志确认上游行为。",
+                            )
+                        }
+                    }
+                }
+            }
+
+            is GameVersionService.VersionScanResult.Failed -> InstallResult.Failed(
+                "安装流程结束了，但扫描本地版本失败：${found.reason}",
+            )
+        }
     }
 
     /**
@@ -279,25 +411,6 @@ object MinecraftDownloadService {
      * 「安装目录与扫描目录一致」这个前提 —— 万一不一致，会在这里暴露，
      * 而不是等用户发现列表是空的。
      */
-    private suspend fun verifyInstalled(versionId: String, dir: Path): InstallResult =
-        withContext(Dispatchers.IO) {
-            when (val found = GameVersionService.scan()) {
-                is GameVersionService.VersionScanResult.Success -> {
-                    if (found.versions.any { it.id == versionId }) {
-                        InstallResult.Success(versionId)
-                    } else {
-                        InstallResult.Failed(
-                            "安装流程结束了，但在 $dir 里找不到版本 $versionId。" +
-                                "可能是磁盘权限或上游安装器异常，请查看日志。",
-                        )
-                    }
-                }
-
-                is GameVersionService.VersionScanResult.Failed -> InstallResult.Failed(
-                    "安装流程结束了，但扫描本地版本失败：${found.reason}",
-                )
-            }
-        }
 }
 
 /** 把异常整理成一句能显示给用户的话。 */
