@@ -179,6 +179,14 @@ fun HmwLxApp() {
     // 读一次就不再变。真正生效要等下次启动（见 HeadlessMcBootstrap）。
     var debugMode by remember { mutableStateOf(AppConfig.isDebugMode()) }
 
+    // 代理设置。初值从配置读一次，之后由设置页改。
+    //
+    // 同调试模式：**不影响本次运行** —— Java 的代理系统属性在第一次
+    // 建立连接时读取，之后再改对已缓存的 HttpClient 无效。
+    // 所以设置页会明确提示「需重启才生效」。
+    var proxyUrl by remember { mutableStateOf(AppConfig.getProxyUrl()) }
+    var proxyDisabled by remember { mutableStateOf(AppConfig.isProxyDisabled()) }
+
     // 启动前的账号预检结果。非 null 时弹提示框。
     var authFailure by remember { mutableStateOf<AuthPreflight.Result?>(null) }
 
@@ -527,6 +535,20 @@ fun HmwLxApp() {
                                                 println("[HMWLX] 调试模式写入配置失败")
                                             }
                                         },
+                                        proxyUrl = proxyUrl,
+                                        proxyDisabled = proxyDisabled,
+                                        onProxyChange = { url, disabled ->
+                                            proxyUrl = url
+                                            proxyDisabled = disabled
+                                            // 两个键都写：只写一个的话，比如只清了 URL
+                                            // 但 PROXY_DISABLED 还是 true，下次启动
+                                            // 就会莫名其妙直连。
+                                            val okUrl = AppConfig.setProxyUrl(url)
+                                            val okDisabled = AppConfig.setProxyDisabled(disabled)
+                                            if (!okUrl || !okDisabled) {
+                                                println("[HMWLX] 代理设置写入配置失败")
+                                            }
+                                        },
                                         onEnterCli = {
                                             settingsSection = SettingsSection.CLI_TERMINAL
                                         },
@@ -537,8 +559,7 @@ fun HmwLxApp() {
                                                     settingsSection = SettingsSection.DEVELOPER
                                                 },
                                             )
-                                        },
-                                    )
+                                        },                                    )
                                 }
                             }
                         }

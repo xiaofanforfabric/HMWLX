@@ -21,6 +21,7 @@
 package org.cn.xiaofan.bootstrap
 
 import org.cn.xiaofan.config.AppConfig
+import org.cn.xiaofan.config.ProxyConfig
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -77,6 +78,7 @@ object HeadlessMcBootstrap {
     fun start() {
         if (state.compareAndSet(State.NEW, State.STARTING)) {
             try {
+                applyProxyIfConfigured()
                 applyDebugModeIfEnabled()
                 QuarkusLauncher.initializeAndStart()
                 state.set(State.READY)
@@ -112,6 +114,35 @@ object HeadlessMcBootstrap {
             )
             State.READY -> Unit
             else -> throw IllegalStateException("headlessmc 容器状态异常: $current")
+        }
+    }
+
+    /**
+     * 应用代理配置。
+     *
+     * <h2>为什么必须在这里、且必须在容器启动前</h2>
+     *
+     * Java **不读** `http_proxy` / `https_proxy` 环境变量 —— 实测
+     * `ProxySelector.getDefault().select()` 返回 `[DIRECT]`。
+     * 不显式设系统属性的话，所有请求都从真实 IP 发出。
+     *
+     * <p>微软的账号风控会把「同一账号短时间内从两个相隔很远的 IP 登录」
+     * 判为可疑并冻结账号 —— 这就是之前那次「账号被改密码」的真实原因。
+     *
+     * <p>系统属性里的代理只在第一次建立连接时被读取，之后再改对已缓存的
+     * `HttpClient` 无效，所以必须赶在 Quarkus（以及它内部的 REST client）
+     * 初始化之前调。
+     *
+     * @see org.cn.xiaofan.config.ProxyConfig.apply
+     */
+    private fun applyProxyIfConfigured() {
+        val entry = ProxyConfig.apply()
+        if (entry == null) {
+            System.err.println("[HMWLX] 网络：直连（未配置代理）")
+        } else {
+            // 不打印认证信息，只说明走哪里、来自哪里 ——
+            // 日志可能被用户贴到 issue 里。
+            System.err.println("[HMWLX] 网络：经由代理 ${entry.display}（来源：${entry.source}）")
         }
     }
 

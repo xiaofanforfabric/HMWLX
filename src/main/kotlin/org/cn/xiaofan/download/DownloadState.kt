@@ -174,8 +174,10 @@ class DownloadState internal constructor() {
 
     /** 下载中状态。 */
     data class InstallingUi(
-        /** 正在下载的版本号。 */
+        /** 正在下载的 MC 版本号（不带加载器修饰），列表用它匹配高亮。 */
         val versionId: String,
+        /** 带加载器修饰的展示文案，如 `Fabric 0.16.9 / 1.21.4`。 */
+        val label: String,
         /** 当前阶段描述，来自上游的进度回调。 */
         val stage: String,
     )
@@ -188,6 +190,46 @@ class DownloadState internal constructor() {
     sealed interface InstallOutcome {
         data class Success(val versionId: String) : InstallOutcome
         data class Failed(val versionId: String, val reason: String) : InstallOutcome
+    }
+
+    /**
+     * 某个 MC 版本的加载器支持情况（详情页用）。
+     *
+     * <p>缓存键是 MC 版本号：用户可能来回切详情页，重复查三次 API 没意义。
+     * 不设过期 —— 加载器对某个已发布 MC 版本的构建列表基本不再变（
+     * Fabric 会追加新 loader 版本，但那不影响「支不支持」这个判断）。
+     */
+    var loaderSupport by mutableStateOf<Map<String, LoaderSupportUi>>(emptyMap())
+        private set
+
+    /** 加载器查询的界面状态。 */
+    sealed interface LoaderSupportUi {
+        /** 正在查询三个加载器。 */
+        data object Loading : LoaderSupportUi
+
+        /** 查询完成。每个加载器一条，顺序与 [ModLoaderService.Loader.entries] 一致。 */
+        data class Loaded(val supports: List<ModLoaderService.Support>) : LoaderSupportUi
+    }
+
+    /**
+     * 查询某个 MC 版本的加载器支持情况（带缓存）。
+     *
+     * <p>并行查三个加载器，见 [ModLoaderService.querySupport]。
+     * 重复调用已查询过的版本会直接返回 —— 调用方不需要自己判重。
+     */
+    suspend fun loadLoaderSupport(versionId: String) {
+        if (loaderSupport[versionId] is LoaderSupportUi.Loaded) return
+
+        loaderSupport = loaderSupport + (versionId to LoaderSupportUi.Loading)
+
+        val supports = ModLoaderService.querySupport(versionId)
+
+        loaderSupport = loaderSupport + (versionId to LoaderSupportUi.Loaded(supports))
+    }
+
+    /** 清掉某个版本的加载器缓存，让下次进入详情页重新查（网络失败后用）。 */
+    fun invalidateLoaderSupport(versionId: String) {
+        loaderSupport = loaderSupport - versionId
     }
 
     /** 关闭结果提示。 */
@@ -235,13 +277,40 @@ class DownloadState internal constructor() {
      * <p>同样只允许放行态调用 —— 这是最后一道闸，界面层不该是唯一的守卫。
      */
     suspend fun install(versionId: String) {
+        installWith(versionId, loader = null, build = null)
+    }
+
+    /**
+     * 下载并安装指定加载器 + 构建的版本。
+     *
+     * <p>与原版安装共用同一套状态机：同时只允许一个下载、成功才推
+     * [localVersionsToken]。区别只在于装出来的版本名由上游决定
+     * （如 `fabric-loader-0.16.9-1.21.4`），所以 [InstallOutcome.Success]
+     * 里带的是**上游实际装出来的版本名**，不是用户点的版本号。
+     *
+     * @param loader 加载器；null 表示原版
+     * @param build 加载器构建标识；null 表示让上游挑最新
+     */
+    suspend fun installWith(
+        versionId: String,
+        loader: ModLoaderService.Loader?,
+        build: String?,
+    ) {
         if (access !is DownloadAccess.Allowed) return
         if (installing != null) return
 
-        installing = InstallingUi(versionId = versionId, stage = "准备中…")
+        // 界面上显示的名字：带加载器时要写清楚装的是哪个组合，
+        // 否则用户看到「正在下载 1.21.4」会以为在下原版。
+        val label = if (loader == null) {
+            versionId
+        } else {
+            "${loader.displayName} $build / $versionId"
+        }
+
+        installing = InstallingUi(versionId = versionId, label = label, stage = "准备中…")
         installResult = null
 
-        val result = MinecraftDownloadService.install(versionId) { stage ->
+        val result = MinecraftDownloadService.installWith(versionId, loader, build) { stage ->
             // 进度回调在 IO 线程上触发，写 Compose 状态是线程安全的
             // （mutableStateOf 的写入会被转发到主线程的快照系统）。
             installing = installing?.copy(stage = stage)
@@ -256,7 +325,7 @@ class DownloadState internal constructor() {
             }
 
             is MinecraftDownloadService.InstallResult.Failed ->
-                InstallOutcome.Failed(versionId, result.reason)
+                InstallOutcome.Failed(label, result.reason)
         }
     }
 

@@ -259,7 +259,7 @@ private fun AllowedView(
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp))
                 Text(
-                    text = Messages.get(TextKey.DOWNLOAD_INSTALLING, installing.versionId) +
+                    text = Messages.get(TextKey.DOWNLOAD_INSTALLING, installing.label) +
                         "  " + installing.stage,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -340,6 +340,9 @@ private fun AllowedView(
                     mutableStateOf(MinecraftDownloadService.VersionCategory.RELEASE)
                 }
 
+                // 打开了哪个版本的详情弹窗。
+                var detailVersion by remember { mutableStateOf<String?>(null) }
+
                 CategoryTabs(
                     selected = tab,
                     all = list.versions,
@@ -373,11 +376,19 @@ private fun AllowedView(
                             versions = shown,
                             installingId = installing?.versionId,
                             enabled = installing == null,
-                            onInstall = { version ->
-                                scope.launch { state.install(version.id) }
-                            },
+                            // 按钮现在是「详情」：先选加载器再下，
+                            // 而不是直接把原版装下去。
+                            onOpenDetails = { version -> detailVersion = version.id },
                         )
                     }
+                }
+
+                detailVersion?.let { versionId ->
+                    VersionDetailDialog(
+                        versionId = versionId,
+                        state = state,
+                        onDismiss = { detailVersion = null },
+                    )
                 }
             }
         }
@@ -455,7 +466,7 @@ private fun DownloadableVersionList(
     versions: List<MinecraftDownloadService.DownloadableVersion>,
     installingId: String?,
     enabled: Boolean,
-    onInstall: (MinecraftDownloadService.DownloadableVersion) -> Unit,
+    onOpenDetails: (MinecraftDownloadService.DownloadableVersion) -> Unit,
 ) {
     LazyColumn(
         // 这里用 fillMaxSize 而不是 weight：外层已经由 Box 接住了
@@ -483,14 +494,16 @@ private fun DownloadableVersionList(
                 )
                 // 正在下载的那个显示进度，其余显示按钮。
                 // 同时只允许一个下载：并发写同一个游戏目录会互相覆盖。
-                if (installingId == version.id) {
+                if (installingId != null && version.id == installingId) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp))
                 } else {
                     TextButton(
-                        onClick = { onInstall(version) },
-                        enabled = enabled,
+                        onClick = { onOpenDetails(version) },
+                        // 安装进行中时仍可点开详情（看进度、看选项），
+                        // 但弹窗里的下载按钮会禁用 —— 真正的互斥在那里。
+                        enabled = true,
                     ) {
-                        Text(text(TextKey.DOWNLOAD_ACTION))
+                        Text(text(TextKey.DOWNLOAD_DETAILS))
                     }
                 }
             }
