@@ -23,6 +23,7 @@ package org.cn.xiaofan.ui.component
 import org.cn.xiaofan.download.ModLoaderService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -137,6 +138,49 @@ class VersionIconsTest {
                 "图标资源不存在: $path",
             )
             stream?.close()
+        }
+    }
+
+    @Test
+    fun `三个界面共用同一份图标判据`() {
+        // 这条测试防的是「只改了一处」这类遗漏：
+        // 版本列表用了 VersionIcons，但启动抽屉（VersionDrawer）和下载中心
+        // （DownloadCenterScreen）各自还有一套独立的 when，结果同一个版本
+        // 在不同地方长得不一样。
+        //
+        // 判据就是：这些文件里不该再出现硬编码的图标路径。
+        // 路径都集中在 VersionIcons 的常量里。
+        val uiFiles = listOf(
+            "src/main/kotlin/org/cn/xiaofan/ui/component/VersionDrawer.kt",
+            "src/main/kotlin/org/cn/xiaofan/ui/screen/DownloadCenterScreen.kt",
+            "src/main/kotlin/org/cn/xiaofan/ui/screen/VersionListScreen.kt",
+        )
+
+        for (relPath in uiFiles) {
+            val file = java.io.File(relPath)
+            if (!file.isFile) {
+                // 跑测试时的 cwd 可能是别处，找不到文件就跳过而不是误报。
+                println("跳过（找不到 $relPath）")
+                continue
+            }
+            val text = file.readText()
+            val hardcoded = listOf(
+                "/images/icon-release.png",
+                "/images/icon-snapshot.png",
+                "/images/icon-aprilfools.png",
+                "/images/icon-old.png",
+                "/images/icon-fabric.png",
+                "/images/icon-forge.png",
+                "/images/icon-neoforge.png",
+                // 无前导斜杠的旧写法也要查
+                "\"images/icon-",
+            ).filter { it in text }
+
+            assertTrue(
+                hardcoded.isEmpty(),
+                "${file.name} 里还有硬编码的图标路径 $hardcoded，" +
+                    "应改为引用 VersionIcons 的常量，否则改一处漏两处",
+            )
         }
     }
 }

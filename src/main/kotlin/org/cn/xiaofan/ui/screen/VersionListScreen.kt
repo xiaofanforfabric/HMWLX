@@ -59,8 +59,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,7 +74,6 @@ import org.cn.xiaofan.util.DesktopOpener
 import org.cn.xiaofan.version.GameVersion
 import org.cn.xiaofan.version.VersionState
 import org.cn.xiaofan.version.VersionType
-import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * 主界面：版本列表 + 版本详情。
