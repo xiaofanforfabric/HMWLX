@@ -141,6 +141,56 @@ object ModLoaderService {
         Support.Failed(loader, e.describeModLoaderError())
     }
 
+    /**
+     * 查询某个加载器**相邻的** MC 版本是否有构建。
+     *
+     * <h2>为什么需要这个</h2>
+     *
+     * NeoForge 只在部分 MC 版本上发稳定版 —— 官方发布记录是
+     * 21.6→1.21.6、21.9→1.21.9、21.11→1.21.11，中间的 1.21.7、1.21.8
+     * 直接跳过。用户看到「NeoForge 不支持 1.21.7」时最想知道的是
+     * 「那我该用哪个版本」。
+     *
+     * <p>所以「不支持」时顺手查一下邻近版本，能给出可操作的建议，
+     * 而不是让用户自己一个个试。
+     *
+     * @param step -1 表示往旧版本找，+1 往新版本找
+     * @return 找到的第一个可用版本（MC 版本号），没有则 null
+     */
+    suspend fun findNearbySupport(
+        loader: Loader,
+        vanillaVersion: String,
+        step: Int,
+        maxDistance: Int = 4,
+    ): String? = withContext(Dispatchers.IO) {
+        val parts = vanillaVersion.split('.')
+        // 只对三段式正式版做邻近查找；两段式（26.1）与快照格式复杂，
+        // 猜错了反而误导，不如不猜。
+        if (parts.size != 3) return@withContext null
+        val nums = parts.map { it.toIntOrNull() ?: return@withContext null }
+
+        var current = nums.toMutableList()
+        repeat(maxDistance) {
+            // 只在最后一段（patch）上移动。跨 minor 版本的兼容性差异太大，
+            // 说「1.21.7 不支持？那用 1.20.1 吧」没有意义。
+            val next = current[2] + step
+            if (next < 0) return@withContext null
+            current = mutableListOf(current[0], current[1], next)
+
+            val candidate = current.joinToString(".")
+            val ok = runCatching {
+                when (loader) {
+                    Loader.FABRIC -> fetchFabricBuilds(candidate).isNotEmpty()
+                    Loader.FORGE -> fetchForgeBuilds(candidate).isNotEmpty()
+                    Loader.NEOFORGE -> fetchNeoForgeBuilds(candidate).isNotEmpty()
+                }
+            }.getOrDefault(false)
+
+            if (ok) return@withContext candidate
+        }
+        null
+    }
+
     // ------------------------------------------------------------------ Fabric
     //
     // GET /v2/versions/loader/<mc>

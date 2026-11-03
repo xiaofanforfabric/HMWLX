@@ -230,6 +230,49 @@ class DownloadState internal constructor() {
     /** 清掉某个版本的加载器缓存，让下次进入详情页重新查（网络失败后用）。 */
     fun invalidateLoaderSupport(versionId: String) {
         loaderSupport = loaderSupport - versionId
+        nearbySupport = nearbySupport - versionId
+    }
+
+    /**
+     * 某个 MC 版本下，各加载器「附近可用的版本」。
+     *
+     * <p>NeoForge 只在部分 MC 版本上发版（21.6→1.21.6、21.9→1.21.9，
+     * 中间的 1.21.7/1.21.8 直接跳过）。用户看到「不支持」时最想知道
+     * 「那我该用哪个」，所以这里缓存邻近版本的查询结果。
+     *
+     * <p>值形如 `1.21.6`；null 表示附近也没有。
+     */
+    var nearbySupport by mutableStateOf<Map<String, Map<ModLoaderService.Loader, String?>>>(emptyMap())
+        private set
+
+    /**
+     * 查询某个版本下不可用加载器的邻近可用版本。
+     *
+     * <p>只对 `Unsupported` 的加载器查 —— `Available` 的不需要，
+     * `Failed` 的查了也没意义（网络本身就不通）。
+     */
+    suspend fun loadNearbySupport(versionId: String) {
+        val loaded = loaderSupport[versionId] as? LoaderSupportUi.Loaded ?: return
+        if (nearbySupport.containsKey(versionId)) return
+
+        val unsupported = loaded.supports
+            .filterIsInstance<ModLoaderService.Support.Unsupported>()
+            .map { it.loader }
+
+        if (unsupported.isEmpty()) {
+            nearbySupport = nearbySupport + (versionId to emptyMap())
+            return
+        }
+
+        val result = mutableMapOf<ModLoaderService.Loader, String?>()
+        for (loader in unsupported) {
+            // 先往旧版本找，再往新版本找：用户手上可能已经有旧版本的整合包，
+            // 而新版本往往还没出。
+            result[loader] = ModLoaderService.findNearbySupport(loader, versionId, step = -1)
+                ?: ModLoaderService.findNearbySupport(loader, versionId, step = +1)
+        }
+
+        nearbySupport = nearbySupport + (versionId to result)
     }
 
     /** 关闭结果提示。 */

@@ -281,6 +281,13 @@ object TextKey {
     /** 详情页：加载器不支持这个版本。`{0}` 为加载器名，`{1}` 为 MC 版本。 */
     const val DOWNLOAD_LOADER_UNSUPPORTED = "download.loader.unsupported"
 
+    /**
+     * 详情页：加载器不支持这个版本，但邻近版本有。
+     * `{0}` 加载器名，`{1}` 当前 MC 版本，`{2}` 建议的 MC 版本。
+     */
+    const val DOWNLOAD_LOADER_UNSUPPORTED_WITH_NEARBY =
+        "download.loader.unsupported.nearby"
+
     /** 详情页：加载器查询失败。`{0}` 名称，`{1}` 原因。 */
     const val DOWNLOAD_LOADER_FAILED = "download.loader.failed"
 

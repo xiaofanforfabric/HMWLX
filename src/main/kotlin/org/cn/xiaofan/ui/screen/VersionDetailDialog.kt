@@ -96,6 +96,9 @@ fun VersionDetailDialog(
     // DownloadState 的缓存会让 loadLoaderSupport 立刻返回。
     LaunchedEffect(versionId) {
         state.loadLoaderSupport(versionId)
+        // 主查询完成后，再查邻近版本 —— 只为「不支持」的加载器服务，
+        // 目的是告诉用户「那该用哪个版本」。
+        state.loadNearbySupport(versionId)
     }
 
     // 安装成功后自动关闭弹窗 —— 用户在弹窗里等下载，装完还留着没意义。
@@ -226,15 +229,32 @@ fun VersionDetailDialog(
                                         },
                                     )
 
-                                    is ModLoaderService.Support.Unsupported -> LoaderUnavailable(
+                                    is ModLoaderService.Support.Unsupported -> {
                                         // 「不支持」是正常结果，不是错误 —— 用弱化色而不是红色。
-                                        label = Messages.get(
-                                            TextKey.DOWNLOAD_LOADER_UNSUPPORTED,
-                                            support.loader.displayName,
-                                            versionId,
-                                        ),
-                                        isError = false,
-                                    )
+                                        //
+                                        // 但光说「不支持」没有用 —— 用户接下来要问的是
+                                        // 「那我该用哪个」。所以邻近版本查到什么就一并展示。
+                                        val nearby = state.nearbySupport[versionId]
+                                            ?.get(support.loader)
+
+                                        LoaderUnavailable(
+                                            label = if (nearby != null) {
+                                                Messages.get(
+                                                    TextKey.DOWNLOAD_LOADER_UNSUPPORTED_WITH_NEARBY,
+                                                    support.loader.displayName,
+                                                    versionId,
+                                                    nearby,
+                                                )
+                                            } else {
+                                                Messages.get(
+                                                    TextKey.DOWNLOAD_LOADER_UNSUPPORTED,
+                                                    support.loader.displayName,
+                                                    versionId,
+                                                )
+                                            },
+                                            isError = false,
+                                        )
+                                    }
 
                                     is ModLoaderService.Support.Failed -> {
                                         // 部分失败：只列一次重试按钮，不每个加载器都给一个 ——
