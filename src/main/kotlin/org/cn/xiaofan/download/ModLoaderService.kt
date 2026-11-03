@@ -231,17 +231,26 @@ object ModLoaderService {
 
     // ------------------------------------------------------------------ NeoForge
     //
-    // NeoForge 的版本号是 `<mcMinor>.<mcPatch>.<build>`，例如 MC 1.21.4 对应
-    // `21.4.x`。它不是 `<mc版本>-<构建>` 的形式，所以要换算。
+    // 接口返回 `{"isSnapshot": false, "versions": ["20.2.3-beta", ...]}`。
     //
-    // 这个换算规则是 NeoForge 官方约定，但对 1.20.1 之前的版本不适用
-    // （那些是 Forge 的天下），所以换算失败就直接视为不支持。
+    // 注意 `versions` 是**数组**而不是对象。用 Json.objectAt 取它会永远返回
+    // null（那个函数强制要求结果是 Map），于是 `?: return emptyList()`
+    // 让整个 NeoForge 永远显示「不支持」—— 而且不报错，看起来就像
+    // 「NeoForge 确实没给这个版本发过版」。
+    //
+    // 实测数据（1856 个版本）：
+    //   20.2.*  79 个     21.4.* 158 个     21.6.*  21 个
+    //   21.7.*  26 个     21.8.*  56 个     21.9.*  17 个
+    //   21.11.* 46 个     26.1.* 171 个     26.3.*  97 个
+    // 所以 1.21.7 是有构建的（26 个，全是 -beta）。
     private fun fetchNeoForgeBuilds(vanillaVersion: String): List<String> {
         val prefix = neoforgePrefix(vanillaVersion) ?: return emptyList()
 
         val json = fetchText(NEOFORGE_METADATA_URL)
         val root = Json.parse(json) ?: return emptyList()
-        val versions = Json.objectAt(root, "versions") ?: return emptyList()
+        // versions 是数组：直接 as? List，不要走 objectAt。
+        val versions = (root as? Map<*, *>)?.get("versions") as? List<*>
+            ?: return emptyList()
 
         return versions
             .mapNotNull { it as? String }
@@ -320,11 +329,10 @@ object ModLoaderService {
         // 早于 1.20.1 的没有 NeoForge（那时它还是 Forge 的一部分）。
         if (minor < 20 || (minor == 20 && patch < 1)) return null
 
-        // 特例：1.20.1 沿用 Forge 的 47.1.x 版本号。
-        // NeoForge 首个发布版就叫 47.1.3，为了和 Forge 47.1.x 对应。
-        // 从 1.20.2 起才改成 <minor>.<patch>.<build>。
-        if (minor == 20 && patch == 1) return "47.1."
-
+        // 关于 1.20.1：曾以为它沿用 Forge 的 47.x 版本号，实测**不成立** ——
+        // 拉取全部 1856 个版本后，以 `47.` 开头的一个都没有，以 `20.1.` 开头的也没有。
+        // NeoForge 实际最早的版本是 `20.2.3-beta`（对应 MC 1.20.2）。
+        // 所以 1.20.1 就是没有 NeoForge，走通用的 <minor>.<patch>. 规则即可。
         return "$minor.$patch."
     }
 

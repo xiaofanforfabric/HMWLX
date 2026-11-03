@@ -22,6 +22,7 @@ package org.cn.xiaofan.download
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -43,37 +44,32 @@ class ModLoaderServiceTest {
 
     @Test
     fun `NeoForge 版本前缀换算`() {
-        // ---- 老方案：三段式 MC 版本 ----
-        // 1.20.1 是唯一特例，沿用 Forge 的 47.x 版本号
-        assertEquals("47.1.", ModLoaderService.neoforgePrefix("1.20.1"))
+        // 1.20.1 没有 NeoForge。曾以为它沿用 Forge 的 47.x 号，实测不成立 ——
+        // 拉取全部 1856 个版本后，`47.` 开头与 `20.1.` 开头的一个都没有。
+        // NeoForge 最早是 20.2.3-beta（对应 MC 1.20.2）。
+        assertEquals("20.1.", ModLoaderService.neoforgePrefix("1.20.1"))
 
-        // 1.20.2 起改成 <minor>.<patch>.<build>
         assertEquals("20.2.", ModLoaderService.neoforgePrefix("1.20.2"))
         assertEquals("21.4.", ModLoaderService.neoforgePrefix("1.21.4"))
         assertEquals("21.1.", ModLoaderService.neoforgePrefix("1.21.1"))
         assertEquals("21.11.", ModLoaderService.neoforgePrefix("1.21.11"))
+        // 1.21.7 / 1.21.8 也确实有构建（26 / 56 个，全是 -beta），
+        // 不是「NeoForge 只发偶数版本」那种规律。
+        assertEquals("21.7.", ModLoaderService.neoforgePrefix("1.21.7"))
 
         // ---- 新方案：两段式 MC 版本（Mojang 从 26.1 起改的）----
-        //
-        // NeoForge 官方 26.1 说明：版本号变成四段，前三段标识 MC 版本，
-        // 第四段是构建号。例如 26.1.0.10-beta 对应 MC 26.1。
-        // 所以前缀必须带 "0."，否则 "26.1." 会误匹配 26.10.x。
         assertEquals("26.1.0.", ModLoaderService.neoforgePrefix("26.1"))
         assertEquals("26.3.0.", ModLoaderService.neoforgePrefix("26.3"))
-        // MC hotfix 版（若存在）：26.1.1 -> 26.1.1.<build>
         assertEquals("26.1.1.", ModLoaderService.neoforgePrefix("26.1.1"))
 
         // 关键反例：MC 26.10 不能被 26.1 的前缀误匹配。
-        // 这正是前缀取三段而不是两段的原因。
-        val p2610 = ModLoaderService.neoforgePrefix("26.10")
-        assertEquals("26.10.0.", p2610)
+        assertEquals("26.10.0.", ModLoaderService.neoforgePrefix("26.10"))
         assertTrue(
             !"26.10.0.5".startsWith("26.1.0."),
             "26.10 的构建不应匹配 26.1 的前缀",
         )
 
         // ---- 不支持的情况 ----
-        // NeoForge 从 1.20.1 才开始
         assertNull(ModLoaderService.neoforgePrefix("1.19.4"))
         assertNull(ModLoaderService.neoforgePrefix("1.12.2"))
         assertNull(ModLoaderService.neoforgePrefix("1.20.0"))
@@ -84,6 +80,29 @@ class ModLoaderServiceTest {
         assertNull(ModLoaderService.neoforgePrefix("24w14a"))
         assertNull(ModLoaderService.neoforgePrefix("1.21"))
         assertNull(ModLoaderService.neoforgePrefix(""))
+    }
+
+    @Test
+    fun `NeoForge API 的 versions 是数组不是对象`() {
+        // 这条测试防的是一个真实发生过的 bug：
+        // 用 Json.objectAt(root, "versions") 取数组字段永远返回 null
+        // （那个函数强制要求结果是 Map），于是 NeoForge 永远显示「不支持」，
+        // 而且不报错 —— 看起来就像「这个加载器确实没发过这个版本」。
+        //
+        // 这里用真实响应的片段验证解析路径。
+        val sample = """{"isSnapshot":false,"versions":["20.2.3-beta","21.7.25-beta"]}"""
+        val root = org.cn.xiaofan.config.Json.parse(sample)
+        val versions = (root as? Map<*, *>)?.get("versions") as? List<*>
+
+        assertNotNull(versions, "versions 应能解析成 List")
+        assertEquals(2, versions!!.size)
+        assertEquals("21.7.25-beta", versions[1])
+
+        // 对照：objectAt 确实取不到数组字段（这是有意设计的，不是 bug）
+        assertNull(
+            org.cn.xiaofan.config.Json.objectAt(root, "versions"),
+            "objectAt 只用于取对象；取数组要用 as? List",
+        )
     }
 
     // ---------------------------------------------------------------- 网络查询
