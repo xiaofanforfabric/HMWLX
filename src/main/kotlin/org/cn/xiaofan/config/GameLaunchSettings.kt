@@ -145,12 +145,29 @@ data class GameLaunchSettings(
         }
 
         val max = maxMemoryMb?.coerceIn(MIN_MEMORY_MB, ceilingMb)
-        val min = minMemoryMb?.coerceIn(MIN_MEMORY_MB, ceilingMb)
+
+        // -Xms 的上限取决于 -Xmx 有没有被设。
+        //
+        // 这是本类最容易写错的一处，之前的实现「max == null 就不夹逼 min」
+        // 是错的：没设 -Xmx 不等于 -Xmx 无限大，JVM 会用自己的默认值
+        // （物理内存的 1/4）。用户设 -Xms6G 又不设 -Xmx 时，实际生效的
+        // 是 -Xms6G -Xmx2G，JVM 报
+        // `Initial heap size set to a larger value than the maximum heap size`
+        // 直接拒绝启动。
+        //
+        // 物理内存未知（0）时按 MIN_MEMORY_MB * 4 这个保守值兜底 ——
+        // 宁可让用户设得小一点，也不要给出一个必然失败的合法值。
+        val minCeiling = max ?: if (physicalMemoryMb > 0) {
+            (physicalMemoryMb / JVM_DEFAULT_MAX_HEAP_DIVISOR)
+                .toInt()
+                .coerceIn(MIN_MEMORY_MB, ceilingMb)
+        } else {
+            MIN_MEMORY_MB * 4
+        }
+
+        val min = minMemoryMb
+            ?.coerceIn(MIN_MEMORY_MB, minCeiling)
             // 初始堆不能大于最大堆：JVM 会直接拒绝启动。
-            //
-            // 只设了 min 没设 max 的情况（`max == null`）不夹逼 —— 此时
-            // max 交给 JVM 自己决定，我们无权假设它的值。用户可能故意
-            // 用 `-Xms4G` 而不设 `-Xmx`，压成别的值反而错了。
             ?.let { m -> if (max != null && m > max) max else m }
 
         return copy(
@@ -183,6 +200,15 @@ data class GameLaunchSettings(
          * 用户完全猜不到是内存设太大导致的。
          */
         const val MAX_MEMORY_RATIO = 0.8
+
+        /**
+         * JVM 未指定 `-Xmx` 时的默认最大堆 = 物理内存 / 4。
+         *
+         * <p>对应 `-XX:MaxRAMPercentage=25`。这个数字必须与 JVM 实际行为
+         * 保持一致，否则 `-Xms` 的上限就形同虚设 —— 用户能设出一个
+         * 启动必然失败的值。
+         */
+        const val JVM_DEFAULT_MAX_HEAP_DIVISOR = 4
     }
 }
 

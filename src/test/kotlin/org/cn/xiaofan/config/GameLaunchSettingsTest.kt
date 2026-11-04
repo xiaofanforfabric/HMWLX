@@ -150,6 +150,61 @@ class GameLaunchSettingsTest {
         assertEquals(1024, normalized.minMemoryMb)
     }
 
+    /**
+     * 回归测试：只设 `-Xms` 不设 `-Xmx` 时，`-Xms` 也要受 JVM 默认最大堆约束。
+     *
+     * <p>这是评审指出的真实缺陷。没给 `-Xmx` 时 JVM 默认最大堆只有物理内存
+     * 的 1/4；若允许 `-Xms` 跑到物理内存的 80%，就会拼出
+     * `-Xms12G`（无 `-Xmx`，实际 `-Xmx` 约 4G）这种组合，JVM 直接报
+     * `Initial heap size set to a larger value than the maximum heap size`
+     * 拒绝启动。
+     *
+     * <p>之前的实现里有一句「max == null 就不夹逼 min」，注释还振振有词，
+     * 正是这个 bug 的来源。此测试锁住正确行为。
+     */
+    @Test
+    fun `只设初始内存时上限是 JVM 默认最大堆`() {
+        val physicalMb = 16L * 1024 // 16GB
+        val normalized = GameLaunchSettings(minMemoryMb = 12_000).normalized(physicalMb)
+
+        // JVM 默认 -Xmx ≈ 16384 / 4 = 4096MB
+        val jvmDefaultMax = (physicalMb / GameLaunchSettings.JVM_DEFAULT_MAX_HEAP_DIVISOR).toInt()
+        assertEquals(jvmDefaultMax, normalized.minMemoryMb)
+        assertNull(normalized.maxMemoryMb, "不该擅自替用户补上 -Xmx")
+    }
+
+    @Test
+    fun `只设初始内存时小值不被改动`() {
+        val normalized = GameLaunchSettings(minMemoryMb = 1024).normalized(16L * 1024)
+        assertEquals(1024, normalized.minMemoryMb)
+    }
+
+    @Test
+    fun `设了最大内存时初始内存上限跟随最大内存`() {
+        // 有显式 -Xmx 时，JVM 默认值不再相关，上限就是用户给的值。
+        val normalized = GameLaunchSettings(maxMemoryMb = 8192, minMemoryMb = 12_000)
+            .normalized(16L * 1024)
+        assertEquals(8192, normalized.minMemoryMb)
+    }
+
+    @Test
+    fun `物理内存未知时初始内存也给保守上限`() {
+        // 探测失败（0）时不能放开到 MAX_MEMORY_MB，
+        // 否则用户能设出启动必然失败的值。
+        val normalized = GameLaunchSettings(minMemoryMb = 60_000).normalized(0)
+        val actual = normalized.minMemoryMb ?: 0
+        assertTrue(
+            actual <= GameLaunchSettings.MIN_MEMORY_MB * 4,
+            "探测失败时应给保守上限，实际: $actual",
+        )
+    }
+
+    @Test
+    fun `物理内存未知且设了最大内存时按最大内存夹逼`() {
+        val normalized = GameLaunchSettings(maxMemoryMb = 4096, minMemoryMb = 8192).normalized(0)
+        assertEquals(4096, normalized.minMemoryMb)
+    }
+
     @Test
     fun `只设初始内存时不夹逼到任何上界`() {
         // max == null 表示交给 JVM 决定。此时不该凭空假设它的值，

@@ -381,7 +381,11 @@ fun VersionDetailDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = if (showLaunchSettings) "▾ " else "▸ ",
+                        // 用 ASCII 的 +/- 而不是 ▸(U+25B8) / ▾(U+25BE)：
+                        // 那两个码位不在所有等宽/中文字体里，Compose Desktop
+                        // 上可能渲染成豆腐块。连 U+2212（数学减号）也有同样
+                        // 风险，所以这里一律用 ASCII。
+                        text = if (showLaunchSettings) "- " else "+ ",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

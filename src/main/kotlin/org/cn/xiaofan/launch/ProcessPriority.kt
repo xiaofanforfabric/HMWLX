@@ -65,9 +65,15 @@ object ProcessPriority {
         if (priority == 0) return Result(false, "优先级：默认（未调整）")
         if (pid <= 0) return Result(false, "优先级：无法调整（PID 无效）")
 
-        // 先试 renice，再试 nice -n（作用于整个进程组，某些系统上 renice 被裁剪掉）。
-        val attempt = runRenice(pid, priority) ?: runNice(pid, priority)
-            ?: return Result(false, "优先级：调整失败（系统缺少 renice/nice 命令）")
+        // 只能靠 renice。
+        //
+        // 曾经这里还有个 nice -n <prio> -p <pid> 的兜底分支，删掉了：
+        // nice 只能调整**即将执行的命令**的优先级，procps 虽然提供了
+        // -p 扩展，但作用于已在运行的进程时会被内核静默忽略 ——
+        // 命令返回 0，优先级却没变，属于"看起来成功实则没做"。
+        // 与其留一个骗人的分支，不如让它明确失败。
+        val attempt = runRenice(pid, priority)
+            ?: return Result(false, "优先级：调整失败（系统缺少 renice 命令）")
 
         return if (attempt.exitCode == 0) {
             Result(true, "优先级：已设为 nice=$priority")
@@ -85,15 +91,10 @@ object ProcessPriority {
     /**
      * `renice -n <priority> -p <pid>`。
      *
-     * <p>返回 null 表示命令根本执行不了（不存在 / 被权限策略拦住），
-     * 让调用方继续试下一种方式。
+     * <p>返回 null 表示命令根本执行不了（不存在 / 被权限策略拦住）。
      */
     private fun runRenice(pid: Long, priority: Int): Attempt? =
         runCommand(listOf("renice", "-n", priority.toString(), "-p", pid.toString()))
-
-    /** `nice -n <priority> -p <pid>`（procps 的 nice 支持 -p）。 */
-    private fun runNice(pid: Long, priority: Int): Attempt? =
-        runCommand(listOf("nice", "-n", priority.toString(), "-p", pid.toString()))
 
     /**
      * 执行外部命令并等待。

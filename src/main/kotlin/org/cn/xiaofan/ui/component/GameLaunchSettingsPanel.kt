@@ -98,6 +98,31 @@ fun GameLaunchSettingsPanel(
         mutableStateOf(GameLaunchSettingsStore.load(versionId))
     }
 
+    /**
+     * `-Xms` 的上限：有 `-Xmx` 就跟它，没有就跟 JVM 自己的默认最大堆。
+     *
+     * <p>JVM 在没给 `-Xmx` 时用的默认最大堆是物理内存的 1/4
+     * （`-XX:MaxRAMPercentage=25` 的等价效果）。`-Xms` 一旦超过它，
+     * JVM 会拒绝启动：
+     * ```
+     * Initial heap size set to a larger value than the maximum heap size
+     * ```
+     *
+     * <p>所以未勾选 `-Xmx` 时，`-Xms` 的可用范围和默认值都必须按这个
+     * 「隐藏的」上限来算 —— 否则界面允许用户拖到 6G，实际一启动就崩，
+     * 而且错误信息在几百行日志里很难被理解为"内存设置的问题"。
+     */
+    val minCeilingMb = settings.maxMemoryMb ?: run {
+        if (physicalMb > 0) {
+            (physicalMb / GameLaunchSettings.JVM_DEFAULT_MAX_HEAP_DIVISOR)
+                .toInt()
+                .coerceAtLeast(GameLaunchSettings.MIN_MEMORY_MB)
+        } else {
+            // 物理内存未知时只能给个保守值，绝不能放开到 MAX_MEMORY_MB。
+            GameLaunchSettings.MIN_MEMORY_MB * 4
+        }
+    }
+
     /** 落盘：先把文本态解析回设置，规整后保存。 */
     fun persist(next: GameLaunchSettings) {
         val normalized = next.normalized(physicalMb)
@@ -163,11 +188,15 @@ fun GameLaunchSettingsPanel(
             enabled = enabled,
             onCheckedChange = { checked ->
                 val value = if (checked) {
-                    // 默认取最大内存的一半 —— Xms == Xmx 意味着启动时就要
-                    // 预留全部堆内存，机器上同时跑别的东西会立刻吃紧。
-                    // 一半是绝大多数启动器的默认做法。
-                    val upper = settings.maxMemoryMb ?: ceilingMb
-                    (upper / 2).coerceAtLeast(GameLaunchSettings.MIN_MEMORY_MB)
+                    // 默认取「初始内存上限」的一半。
+                    //
+                    // 为什么不是 ceilingMb 的一半：没勾 -Xmx 时，JVM 自己
+                    // 的默认最大堆只有物理内存的 1/4。若这里按物理内存
+                    // 的 80% 去算，用户能设出 -Xms6G 而没有 -Xmx，
+                    // 实际生效的 -Xmx 只有 2G —— JVM 直接报
+                    // `Initial heap size set to a larger value than the
+                    // maximum heap size`，游戏起不来。
+                    (minCeilingMb / 2).coerceAtLeast(GameLaunchSettings.MIN_MEMORY_MB)
                 } else {
                     null
                 }
@@ -175,13 +204,13 @@ fun GameLaunchSettingsPanel(
             },
         )
         if (settings.minMemoryMb != null) {
-            // 上限是「最大内存 - 一个步长」，而不是「最大内存」。
+            // 上限是「初始内存上限 - 一个步长」，而不是顶到上限本身。
             //
             // 允许两者相等会带来一个静默的坑：Xms == Xmx 时 JVM 启动即
             // 承诺分配这么多堆，某些系统上会直接因申请不到连续内存而
             // 启动失败，而失败信息（"Could not reserve enough space"）
             // 在几百行日志里极难被发现。留出一点余量更稳妥。
-            val minCeiling = ((settings.maxMemoryMb ?: ceilingMb) - STEP_MB)
+            val minCeiling = (minCeilingMb - STEP_MB)
                 .coerceAtLeast(GameLaunchSettings.MIN_MEMORY_MB)
             MemorySlider(
                 value = settings.minMemoryMb ?: GameLaunchSettings.MIN_MEMORY_MB,
