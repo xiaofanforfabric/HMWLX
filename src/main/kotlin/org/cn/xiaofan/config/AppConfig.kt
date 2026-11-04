@@ -204,6 +204,49 @@ object AppConfig {
     }
 
     /**
+     * 读取任意一个键的原始值。
+     *
+     * <p>供 [GameLaunchSettingsStore] 这类按前缀批量存取的模块使用。
+     * 拿不到文件、键不存在时返回 `null`。
+     *
+     * <p>读之前先 `trim()`：`readAll` 会把键两侧的空格去掉再放进 map，
+     * 而 [updateValues] 写入时用的是原样的键。用户手写成
+     * `GAME.x.MAX_MEMORY_MB = 4096`（键侧带空格）时，不清一下就**读不到**
+     * 自己刚写的配置，还会误以为被删了。两边口径统一在同一处。
+     */
+    internal fun readValue(key: String): String? {
+        val file = configFile() ?: return null
+        return runCatching { readAll(file)[key.trim()] }.getOrNull()
+    }
+
+    /**
+     * 批量更新配置项。
+     *
+     * <p>值为 `null` 表示**删除**该键，而不是写入空串 —— 这个区别很重要：
+     * 空串会被下游当成"设过但设成了空"，而删除才是"没设过"。
+     *
+     * <p>一次读、一次写、一次原子替换。逐个键调用 setString 会反复
+     * 重写整个文件，中途失败还会留下写了一半的状态。
+     *
+     * @return 是否写入成功。失败不抛异常。
+     */
+    internal fun updateValues(updates: Map<String, String?>): Boolean {
+        if (updates.isEmpty()) return true
+        val file = configFile() ?: return false
+        return runCatching {
+            val existing = if (file.isFile) readAll(file) else LinkedHashMap()
+            // 键统一 trim：readAll 读出的是去空格后的键，写入时若保留空格，
+            // 同一个键就会在文件里出现两份，删也删不干净。
+            updates.forEach { (key, value) ->
+                val k = key.trim()
+                if (value == null) existing.remove(k) else existing[k] = value
+            }
+            writeAll(file, existing)
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
      * 配置文件路径，仅供诊断与日志使用。
      *
      * 拿不到用户目录时返回 `null`。

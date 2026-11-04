@@ -48,7 +48,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +64,7 @@ import kotlinx.coroutines.launch
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.ui.component.GameLaunchSettingsDialog
 import org.cn.xiaofan.ui.component.VersionIconImage
 import org.cn.xiaofan.ui.component.VersionIcons
 import org.cn.xiaofan.util.DesktopOpener
@@ -86,6 +91,9 @@ fun VersionListScreen(
     val loading = state.loading
     val error = state.error
     val scope = rememberCoroutineScope()
+
+    // 正在编辑启动设置的版本号。null 表示没开弹窗。
+    var settingsVersion by remember { mutableStateOf<String?>(null) }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -146,6 +154,7 @@ fun VersionListScreen(
                         version = current,
                         gameDirPath = state.gameDirPath,
                         onRescan = { state.reload() },
+                        onOpenSettings = { settingsVersion = current.id },
                         onOpenGameDir = {
                             // 打不开目录（目录被删 / 没有文件管理器）只是不响应，不弹错误框：
                             // 用户点这个按钮的目的就是「自己去看看」，弹窗反而挡住他。
@@ -159,6 +168,17 @@ fun VersionListScreen(
                 }
             }
         }
+    }
+
+    // 启动设置弹窗。
+    //
+    // 独立于上面那块主界面：弹窗由 settingsVersion 驱动，
+    // 关掉它只是把状态置 null，不影响列表的滚动位置与选中项。
+    settingsVersion?.let { id ->
+        GameLaunchSettingsDialog(
+            versionId = id,
+            onDismiss = { settingsVersion = null },
+        )
     }
 }
 
@@ -303,6 +323,7 @@ private fun VersionDetail(
     gameDirPath: String?,
     onRescan: () -> Unit,
     onOpenGameDir: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text(
@@ -357,10 +378,7 @@ private fun VersionDetail(
             OutlinedButton(onClick = onOpenGameDir) {
                 Text(text(TextKey.VERSION_OPEN_DIR))
             }
-            OutlinedButton(onClick = {}, enabled = false) {
-                // 占位：版本设置（内存 / JVM 参数 / 是否开独立窗口）还没做。
-                // 先留按钮而不是留空位，是为了让「以后在这儿加」这件事显式地看得见。
-                // TODO(human): 版本设置面板，做完把 enabled 打开并接上 onClick。
+            OutlinedButton(onClick = onOpenSettings) {
                 Text(text(TextKey.VERSION_SETTINGS))
             }
         }
