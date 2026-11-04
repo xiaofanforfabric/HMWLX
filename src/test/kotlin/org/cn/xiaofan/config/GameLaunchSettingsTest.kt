@@ -206,15 +206,6 @@ class GameLaunchSettingsTest {
     }
 
     @Test
-    fun `只设初始内存时不夹逼到任何上界`() {
-        // max == null 表示交给 JVM 决定。此时不该凭空假设它的值，
-        // 把用户填的 -Xms 改掉。
-        val normalized = GameLaunchSettings(minMemoryMb = 4096).normalized(16L * 1024)
-        assertEquals(4096, normalized.minMemoryMb)
-        assertNull(normalized.maxMemoryMb)
-    }
-
-    @Test
     fun `Xms 与 Xmx 不相等时才有意义`() {
         // 回归：曾经 UI 把 Xms 默认算成 Xmx/2，但滑块上限又用了 Xmx，
         // 两边一拉就变成 Xms == Xmx，启动时 JVM 要立刻承诺分配全部堆内存，

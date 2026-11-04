@@ -111,6 +111,14 @@ fun GameLaunchSettingsPanel(
      * <p>所以未勾选 `-Xmx` 时，`-Xms` 的可用范围和默认值都必须按这个
      * 「隐藏的」上限来算 —— 否则界面允许用户拖到 6G，实际一启动就崩，
      * 而且错误信息在几百行日志里很难被理解为"内存设置的问题"。
+     *
+     * <p>注意这里**没有** `coerceAtMost` 到某个全局上限，与
+     * [GameLaunchSettings.normalized] 里那句
+     * `coerceIn(MIN_MEMORY_MB, ceilingMb)` 看起来不一致 —— 是有意的：
+     * 这里只是滑块的上界，拖出来的值一定落在
+     * `[MIN_MEMORY_MB, minCeilingMb]` 内，不会产生非法值；
+     * 而 `normalized()` 要处理**用户手工改配置文件**进来的任意数字，
+     * 所以必须双向夹逼。两边职责不同，不要「统一」成一样。
      */
     val minCeilingMb = settings.maxMemoryMb ?: run {
         if (physicalMb > 0) {
