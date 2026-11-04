@@ -112,10 +112,13 @@ data class GameLaunchSettings(
     /**
      * 生成要注入 `Profile.vmArgs` 的参数列表。
      *
-     * <p>顺序有讲究：`-Xms` 必须在 `-Xmx` 前 —— 反过来的话，某些 JVM
-     * 实现会先按 `-Xmx` 分配初始堆，再读到更小的 `-Xms` 就报
-     * `Initial heap size set to a larger value than the maximum heap size`
-     * 之外的反向错误。保持「小到大」的顺序最安全。
+     * <p>`-Xms` 在前、`-Xmx` 在后，只是为了读起来顺、对比测试输出时
+     * 不用来回找 —— **顺序本身不影响 JVM 行为**。同一个参数出现多次时
+     * JVM 以最后一次为准，跟先后无关。
+     *
+     * <p>真正决定成败的是**值的大小关系**：`-Xms` 大于 `-Xmx` 时 JVM 拒绝
+     * 启动并报 `Initial heap size set to a larger value than the maximum
+     * heap size`。这条约束由 [normalized] 保证，不靠这里的顺序。
      *
      * <p>优先级的**不**在这里生成：nice 值不是 JVM 参数，
      * 要在进程启动后另外调，见 `ProcessPriority`。

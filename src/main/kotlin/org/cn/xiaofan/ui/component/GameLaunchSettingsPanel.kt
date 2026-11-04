@@ -463,7 +463,7 @@ fun GameLaunchSettingsDialog(
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = onDismiss) {
-                        Text(text = "关闭")
+                        Text(text = text(TextKey.COMMON_CLOSE_DIALOG))
                     }
                 }
 

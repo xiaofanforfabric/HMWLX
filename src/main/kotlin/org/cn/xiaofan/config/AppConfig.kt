@@ -208,10 +208,15 @@ object AppConfig {
      *
      * <p>供 [GameLaunchSettingsStore] 这类按前缀批量存取的模块使用。
      * 拿不到文件、键不存在时返回 `null`。
+     *
+     * <p>读之前先 `trim()`：`readAll` 会把键两侧的空格去掉再放进 map，
+     * 而 [updateValues] 写入时用的是原样的键。用户手写成
+     * `GAME.x.MAX_MEMORY_MB = 4096`（键侧带空格）时，不清一下就**读不到**
+     * 自己刚写的配置，还会误以为被删了。两边口径统一在同一处。
      */
     internal fun readValue(key: String): String? {
         val file = configFile() ?: return null
-        return runCatching { readAll(file)[key] }.getOrNull()
+        return runCatching { readAll(file)[key.trim()] }.getOrNull()
     }
 
     /**
@@ -230,8 +235,11 @@ object AppConfig {
         val file = configFile() ?: return false
         return runCatching {
             val existing = if (file.isFile) readAll(file) else LinkedHashMap()
+            // 键统一 trim：readAll 读出的是去空格后的键，写入时若保留空格，
+            // 同一个键就会在文件里出现两份，删也删不干净。
             updates.forEach { (key, value) ->
-                if (value == null) existing.remove(key) else existing[key] = value
+                val k = key.trim()
+                if (value == null) existing.remove(k) else existing[k] = value
             }
             writeAll(file, existing)
             true

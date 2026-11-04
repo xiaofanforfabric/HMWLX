@@ -516,6 +516,9 @@ object TextKey {
     /** 通用的关闭按钮。 */
     const val AUTH_DISMISS = "auth.dismiss"
 
+    /** 通用：关闭对话框。各模块共用，不再各自造一个「关闭」。 */
+    const val COMMON_CLOSE_DIALOG = "common.close.dialog"
+
     // ---- 启动中界面 ----
 
     /** 标题：正在启动。 */
