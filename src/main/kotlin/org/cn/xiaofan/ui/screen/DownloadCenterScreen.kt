@@ -20,7 +20,6 @@
 
 package org.cn.xiaofan.ui.screen
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,8 +42,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,21 +52,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.cn.xiaofan.download.DownloadAccess
 import org.cn.xiaofan.download.DownloadState
 import org.cn.xiaofan.download.MinecraftDownloadService
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
-import org.jetbrains.skia.Image as SkiaImage
+import org.cn.xiaofan.ui.component.VersionIconImage
+import org.cn.xiaofan.ui.component.VersionIcons
 
 /**
  * 下载中心。
@@ -480,7 +476,7 @@ private fun DownloadableVersionList(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                VersionIcon(version.category)
+                VersionIcon(version)
                 Text(
                     text = version.id,
                     style = MaterialTheme.typography.bodyMedium,
@@ -519,45 +515,30 @@ private fun DownloadableVersionList(
  * 「全部」页签里也会显示每行自己的分类图标 —— 分类图标反映的是
  * **这个版本是什么**，不是**当前在看哪个页签**。
  *
- * <p>走 ClassLoader 读 classpath 资源，与 `VersionListScreen.VersionLogo` 一致：
- * 项目没启用 Compose Resources 代码生成，`painterResource` 用不了。
+ * <p>和版本列表、启动抽屉共用 [VersionIcons] —— 之前这三处各写了一套
+ * `when`，结果改了一处另外两处还是老样子。
  */
 @Composable
-private fun VersionIcon(category: MinecraftDownloadService.VersionCategory) {
-    val resource = when (category) {
-        MinecraftDownloadService.VersionCategory.RELEASE -> "/images/icon-release.png"
-        MinecraftDownloadService.VersionCategory.SNAPSHOT -> "/images/icon-snapshot.png"
-        MinecraftDownloadService.VersionCategory.APRIL_FOOLS -> "/images/icon-aprilfools.png"
-        MinecraftDownloadService.VersionCategory.LEGACY -> "/images/icon-old.png"
+private fun VersionIcon(version: MinecraftDownloadService.DownloadableVersion) {
+    // 下载中心里都是原版版本（加载器是选完之后才装），所以这里不需要
+    // 识别加载器：能出现「fabric」字样的只可能是愚人节快照的怪版本号。
+    // 仍然走 loaderIconFor 是为了与另两处行为一致 —— 万一下载列表以后
+    // 也展示已安装的加载器版本，不用再改一次。
+    val resource = VersionIcons.loaderIconFor(version.id) ?: when (version.category) {
+        MinecraftDownloadService.VersionCategory.RELEASE -> VersionIcons.RELEASE
+        MinecraftDownloadService.VersionCategory.SNAPSHOT -> VersionIcons.SNAPSHOT
+        MinecraftDownloadService.VersionCategory.APRIL_FOOLS -> VersionIcons.APRIL_FOOLS
+        MinecraftDownloadService.VersionCategory.LEGACY -> VersionIcons.OLD
         // ALL 不该出现在单个版本上，但枚举必须穷尽。
-        MinecraftDownloadService.VersionCategory.ALL -> "/images/icon-old.png"
+        MinecraftDownloadService.VersionCategory.ALL -> VersionIcons.OLD
     }
 
-    var bitmap by remember(resource) { mutableStateOf<ImageBitmap?>(null) }
-
-    LaunchedEffect(resource) {
-        bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                DownloadCenterLogo.javaClass
-                    .getResourceAsStream(resource)
-                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
-            }.getOrNull()
-        }
-    }
-
-    val image = bitmap ?: return
-
-    Image(
-        bitmap = image,
-        contentDescription = null,
+    VersionIconImage(
+        resource = resource,
+        size = 32.dp,
         filterQuality = FilterQuality.High,
-        // 源图 128~512px，缩到 32dp 仍要开高质量过滤，否则纹理糊成噪点。
-        modifier = Modifier.size(32.dp),
     )
 }
-
-/** 只为拿到 classloader 而存在的锚点。 */
-private object DownloadCenterLogo
 
 /** 结果提示条。 */
 @Composable

@@ -24,7 +24,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -53,7 +52,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -210,22 +208,27 @@ private fun DrawerRow(
 }
 
 /**
- * 版本图标：按类型选图。
+ * 版本图标：优先加载器 LOGO，其次按版本类型选方块。
+ *
+ * <p>和版本列表、下载页共用 [VersionIcons] 一份判据 —— 之前这里是
+ * 独立实现的一套 `when`，结果版本列表显示加载器图标、启动抽屉仍然
+ * 一律方块，同一个版本在两处长得不一样。
  *
  * <p>愚人节优先级最高 —— 它们在 JSON 里写的是 `snapshot`，
  * 如果先判类型就永远看不到愚人节的图标。
- *
- * <p>图标走 `ClassLoader.getResourceAsStream`，和 [AppBackground] 一个路子：
- * 项目没开 Compose Resources 代码生成，手写路径反而少一层依赖。
  */
 @Composable
 private fun VersionIcon(version: GameVersion, modifier: Modifier = Modifier) {
-    val resName = when {
-        version.isAprilFools -> "images/icon-aprilfools.png"
-        version.type == VersionType.RELEASE -> "images/icon-release.png"
-        version.type == VersionType.SNAPSHOT -> "images/icon-snapshot.png"
-        else -> "images/icon-old.png"
+    val resName = VersionIcons.loaderIconFor(version.id) ?: when {
+        version.isAprilFools -> VersionIcons.APRIL_FOOLS
+        version.type == VersionType.RELEASE -> VersionIcons.RELEASE
+        version.type == VersionType.SNAPSHOT -> VersionIcons.SNAPSHOT
+        else -> VersionIcons.OLD
     }
+
+    // 注意 VersionIcons 里的路径**带前导斜杠**（`/images/x.png`），
+    // getResourceAsStream 才认绝对路径。这里曾经写的是 `images/x.png`
+    // （无斜杠），依赖 contextClassLoader 的相对解析，能跑但和别处不一致。
     val bitmap = remember(resName) { loadIcon(resName) }
 
     if (bitmap != null) {
@@ -240,12 +243,17 @@ private fun VersionIcon(version: GameVersion, modifier: Modifier = Modifier) {
 
 /** 读图并解码。失败返回 null，界面上不显示图标而不是崩掉。 */
 private fun loadIcon(resName: String): ImageBitmap? = runCatching {
-    val bytes = Thread.currentThread().contextClassLoader
-        ?.getResourceAsStream(resName)
-        ?.use { it.readBytes() }
+    // 优先用自己类的 loader：绝对路径（前导斜杠）对它的语义最明确，
+    // 不受调用线程 contextClassLoader 变化的影响。
+    val stream = VersionDrawerAnchor::class.java.getResourceAsStream(resName)
+        ?: Thread.currentThread().contextClassLoader?.getResourceAsStream(resName)
         ?: return null
+    val bytes = stream.use { it.readBytes() }
     SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
 }.getOrNull()
+
+/** 只为拿 classloader 而存在的锚点。 */
+private object VersionDrawerAnchor
 
 /** 版本类型对应的文案 key。愚人节优先于快照判定。 */
 private fun GameVersion.typeTextKey(): String = when {

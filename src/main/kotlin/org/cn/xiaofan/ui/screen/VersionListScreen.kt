@@ -20,7 +20,6 @@
 
 package org.cn.xiaofan.ui.screen
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,32 +48,24 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.ui.component.VersionIconImage
+import org.cn.xiaofan.ui.component.VersionIcons
 import org.cn.xiaofan.util.DesktopOpener
 import org.cn.xiaofan.version.GameVersion
 import org.cn.xiaofan.version.VersionState
 import org.cn.xiaofan.version.VersionType
-import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * 主界面：版本列表 + 版本详情。
@@ -272,39 +263,35 @@ private fun VersionRow(version: GameVersion, selected: Boolean, onClick: () -> U
  */
 @Composable
 private fun VersionLogo(version: GameVersion) {
+    // 优先：如果这个版本是模组加载器装的，显示加载器 LOGO 而不是方块。
+    //
+    // 理由：列表里 `1.21.4` 和 `fabric-loader-0.16.9-1.21.4` 都是草方块的话，
+    // 用户扫一眼根本分不清哪个是原版、哪个带加载器 —— 而这恰恰是最需要
+    // 一眼看出的事。加载器 LOGO 是各项目自己的品牌标识，识别度远高于方块。
+    VersionIcons.loaderIconFor(version.id)?.let { loaderIcon ->
+        VersionIconImage(
+            resource = loaderIcon,
+            size = 45.dp,
+            // 加载器图标有像素风（Fabric 羊毛 / NeoForge 狐狸）也有平滑的
+            // （Forge 铁砧），统一用 High：缩到 45dp 时硬边反而会碎。
+            filterQuality = FilterQuality.High,
+        )
+        return
+    }
+
     val resource = when {
         // 愚人节优先判：它们的 type 也是 snapshot，不先排会被归进快照。
-        version.isAprilFools -> "/images/icon-aprilfools.png"
-        version.type == VersionType.RELEASE -> "/images/icon-release.png"
-        version.type == VersionType.SNAPSHOT -> "/images/icon-snapshot.png"
+        version.isAprilFools -> VersionIcons.APRIL_FOOLS
+        version.type == VersionType.RELEASE -> VersionIcons.RELEASE
+        version.type == VersionType.SNAPSHOT -> VersionIcons.SNAPSHOT
         version.type == VersionType.OLD_BETA || version.type == VersionType.OLD_ALPHA ->
-            "/images/icon-old.png"
+            VersionIcons.OLD
         // 加载器写的自定义 type：认不出真实版本类型，用基岩这个中性图标，
         // 比误标成「正式版草方块」诚实。
-        else -> "/images/icon-old.png"
+        else -> VersionIcons.OLD
     }
 
-    var bitmap by remember(resource) { mutableStateOf<ImageBitmap?>(null) }
-
-    LaunchedEffect(resource) {
-        bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                VersionListScreenLogo.javaClass
-                    .getResourceAsStream(resource)
-                    ?.use { SkiaImage.makeFromEncoded(it.readBytes()).toComposeImageBitmap() }
-            }.getOrNull()
-        }
-    }
-
-    val image = bitmap ?: return
-
-    Image(
-        bitmap = image,
-        contentDescription = null,
-        // 源图 128~512px 缩到 45dp：必须开高质量过滤，否则纹理糊成噪点。
-        filterQuality = FilterQuality.High,
-        modifier = Modifier.size(45.dp),
-    )
+    VersionIconImage(resource = resource, size = 45.dp)
 }
 
 /** 只为拿到 classloader 而存在的锚点。 */
