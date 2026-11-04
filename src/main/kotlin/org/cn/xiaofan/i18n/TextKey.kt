@@ -633,4 +633,51 @@ object TextKey {
 
     /** 拒绝确认弹窗的取消按钮。 */
     const val AGREEMENT_DECLINE_CONFIRM_CANCEL = "agreement.decline.confirm.cancel"
+
+    // --- 游戏启动设置（按版本） ---
+
+    /** 分组标题。 */
+    const val LAUNCH_SETTINGS_TITLE = "launch.settings.title"
+
+    /** 作用域说明：`{0}` 为版本号。 */
+    const val LAUNCH_SETTINGS_SCOPE = "launch.settings.scope"
+
+    /** 最大内存勾选项。 */
+    const val LAUNCH_SETTINGS_MAX_MEMORY = "launch.settings.max.memory"
+
+    /** 初始内存勾选项。 */
+    const val LAUNCH_SETTINGS_MIN_MEMORY = "launch.settings.min.memory"
+
+    /** 内存提示：`{0}` 物理内存 MB，`{1}` 上限 MB。 */
+    const val LAUNCH_SETTINGS_MEMORY_HINT = "launch.settings.memory.hint"
+
+    /** 探测不到物理内存时的提示。 */
+    const val LAUNCH_SETTINGS_MEMORY_UNKNOWN = "launch.settings.memory.unknown"
+
+    /** 重置内存按钮。 */
+    const val LAUNCH_SETTINGS_RESET_MEMORY = "launch.settings.reset.memory"
+
+    /** 进程优先级标题。 */
+    const val LAUNCH_SETTINGS_PRIORITY = "launch.settings.priority"
+
+    /** 优先级说明。 */
+    const val LAUNCH_SETTINGS_PRIORITY_HINT = "launch.settings.priority.hint"
+
+    /** 优先级：低。 */
+    const val LAUNCH_SETTINGS_PRIORITY_LOW = "launch.settings.priority.low"
+
+    /** 优先级：正常。 */
+    const val LAUNCH_SETTINGS_PRIORITY_NORMAL = "launch.settings.priority.normal"
+
+    /** 优先级：高。 */
+    const val LAUNCH_SETTINGS_PRIORITY_HIGH = "launch.settings.priority.high"
+
+    /** 自定义 JVM 参数标题。 */
+    const val LAUNCH_SETTINGS_JVM_ARGS = "launch.settings.jvm.args"
+
+    /** 自定义 JVM 参数占位符。 */
+    const val LAUNCH_SETTINGS_JVM_ARGS_PLACEHOLDER = "launch.settings.jvm.args.placeholder"
+
+    /** 自定义 JVM 参数说明。 */
+    const val LAUNCH_SETTINGS_JVM_ARGS_HINT = "launch.settings.jvm.args.hint"
 }

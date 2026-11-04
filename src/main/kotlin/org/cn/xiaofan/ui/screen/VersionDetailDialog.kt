@@ -36,7 +36,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +67,7 @@ import org.cn.xiaofan.download.ModLoaderService
 import org.cn.xiaofan.i18n.Messages
 import org.cn.xiaofan.i18n.TextKey
 import org.cn.xiaofan.i18n.text
+import org.cn.xiaofan.ui.component.GameLaunchSettingsPanel
 import org.cn.xiaofan.ui.component.VersionIconImage
 import org.cn.xiaofan.ui.component.VersionIcons
 
@@ -123,6 +126,8 @@ fun VersionDetailDialog(
     var selectedBuild by remember(versionId) {
         mutableStateOf<String?>(null)
     }
+    // 是否展开「启动设置」区域。
+    var showLaunchSettings by remember(versionId) { mutableStateOf(false) }
 
     val supportUi = state.loaderSupport[versionId]
     val installing = state.installing
@@ -359,6 +364,58 @@ fun VersionDetailDialog(
                     // 没选加载器时给个占位，让 Column 的高度分配稳定，
                     // 避免选中加载器的瞬间布局跳动。
                     Box(modifier = Modifier.weight(1f).fillMaxWidth())
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                // ---- 启动设置（默认折叠） ----
+                //
+                // 折叠的理由：这个弹窗的主任务是「选个加载器然后下载」，
+                // 内存/JVM 参数是只有一部分用户才需要改的次要项。
+                // 一直展开会把构建列表和下载按钮挤下去，主次颠倒。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showLaunchSettings = !showLaunchSettings }
+                        .heightIn(min = 36.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (showLaunchSettings) "▾ " else "▸ ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = text(TextKey.LAUNCH_SETTINGS_TITLE),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (showLaunchSettings) {
+                    // 限制最大高度并自己滚动：JVM 参数输入框展开后
+                    // 整个面板能超过屏幕，不滚动就会把底部按钮顶出去。
+                    //
+                    // 用 verticalScroll 而不是 LazyColumn：里面是一个
+                    // 高度可变的普通 Column，不是列表；塞进 LazyColumn 的
+                    // item 会引入测量约束问题（首行被裁）。
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp)
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.outlineVariant,
+                                RoundedCornerShape(6.dp),
+                            )
+                            .verticalScroll(rememberScrollState())
+                            .padding(8.dp),
+                    ) {
+                        GameLaunchSettingsPanel(
+                            versionId = versionId,
+                            enabled = !busy,
+                        )
+                    }
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))

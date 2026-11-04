@@ -204,6 +204,41 @@ object AppConfig {
     }
 
     /**
+     * 读取任意一个键的原始值。
+     *
+     * <p>供 [GameLaunchSettingsStore] 这类按前缀批量存取的模块使用。
+     * 拿不到文件、键不存在时返回 `null`。
+     */
+    internal fun readValue(key: String): String? {
+        val file = configFile() ?: return null
+        return runCatching { readAll(file)[key] }.getOrNull()
+    }
+
+    /**
+     * 批量更新配置项。
+     *
+     * <p>值为 `null` 表示**删除**该键，而不是写入空串 —— 这个区别很重要：
+     * 空串会被下游当成"设过但设成了空"，而删除才是"没设过"。
+     *
+     * <p>一次读、一次写、一次原子替换。逐个键调用 setString 会反复
+     * 重写整个文件，中途失败还会留下写了一半的状态。
+     *
+     * @return 是否写入成功。失败不抛异常。
+     */
+    internal fun updateValues(updates: Map<String, String?>): Boolean {
+        if (updates.isEmpty()) return true
+        val file = configFile() ?: return false
+        return runCatching {
+            val existing = if (file.isFile) readAll(file) else LinkedHashMap()
+            updates.forEach { (key, value) ->
+                if (value == null) existing.remove(key) else existing[key] = value
+            }
+            writeAll(file, existing)
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
      * 配置文件路径，仅供诊断与日志使用。
      *
      * 拿不到用户目录时返回 `null`。

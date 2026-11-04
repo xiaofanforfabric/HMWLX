@@ -39,6 +39,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.cn.xiaofan.bootstrap.HeadlessMcBootstrap
+import org.cn.xiaofan.config.GameLaunchSettings
+import org.cn.xiaofan.config.GameLaunchSettingsStore
+import org.cn.xiaofan.config.PhysicalMemory
 import org.cn.xiaofan.version.GameVersionService
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -219,7 +222,7 @@ class LaunchController(private val scope: CoroutineScope) {
                 // 一个进度事件都不会有。那时候界面会静悄悄几十秒，
                 // 用户又会以为卡死了。所以额外起一个心跳，见 watchStall()。
                 val watchdog = watchStall()
-                val mcProcess = try {
+                val launched = try {
                     withContext(Dispatchers.IO) { buildAndLaunch(versionId, account) }
                 } finally {
                     watchdog.cancel()
@@ -245,7 +248,7 @@ class LaunchController(private val scope: CoroutineScope) {
 
                 // ---- 阶段 3 已完成（launcher() 返回即依赖就绪）----
                 // ---- 阶段 4：进程已拉起 ----
-                val rawProcess = mcProcess.process.orElse(null)
+                val rawProcess = launched.process.process.orElse(null)
                 process = rawProcess
 
                 _state.update {
@@ -261,6 +264,18 @@ class LaunchController(private val scope: CoroutineScope) {
                 if (rawProcess == null) {
                     fail("进程对象为空，无法读取日志")
                     return@launch
+                }
+
+                // 调整 CPU 优先级。
+                //
+                // 必须等进程真的起来才有 PID，所以放在这里而不是启动前。
+                // 失败只是少了个优化，绝不能让启动流程失败 —— ProcessPriority
+                // 内部已经把异常都吞成结果值了，这里只负责记一行日志。
+                if (launched.priority != GameLaunchSettings.DEFAULT_PRIORITY) {
+                    val result = withContext(Dispatchers.IO) {
+                        ProcessPriority.apply(rawProcess.pid(), launched.priority)
+                    }
+                    appendLog(result.message)
                 }
 
                 // ---- 阶段 5–6：读日志推断 ----
@@ -515,15 +530,32 @@ class LaunchController(private val scope: CoroutineScope) {
      * 与 `LaunchCommand.call()` 走同一套 `ClientLauncher`，区别只是
      * 我们自己构造 Profile，不经过 picocli 解析命令行。
      */
-    private suspend fun buildAndLaunch(versionId: String, account: Account): McProcess {
+    private suspend fun buildAndLaunch(versionId: String, account: Account): LaunchedProcess {
         val clientLauncher = HeadlessMcBootstrap.bean(ClientLauncher::class.java)
 
         val versionArg = VersionArg.parse(versionId)
         val gameDir = GameVersionService.resolveGameDir().toPath()
 
-        val profile = Profile("hmwlx-$versionId", versionArg, gameDir).withOptions(
-            LaunchOptions(Optional.empty(), Optional.empty(), Optional.empty(), false)
-        )
+        // 读该版本的启动设置并规整。
+        //
+        // 规整（夹逼内存范围）放在这里而不是保存时做：用户可能直接改
+        // 配置文件，或者换了台内存更小的机器 —— 只有启动这一刻的物理内存
+        // 才是真正要参考的。
+        val settings = GameLaunchSettingsStore.load(versionId)
+            .normalized(PhysicalMemory.detectMb())
+        val vmArgs = settings.toVmArgs()
+
+        if (vmArgs.isNotEmpty()) {
+            // 打出来是为了排查：JVM 参数出错时启动会立刻失败，
+            // 而 headlessmc 只会把参数拼进命令行，不单独回显。
+            appendLog("JVM 参数: ${vmArgs.joinToString(" ")}")
+        }
+        settings.maxMemoryMb?.let { appendLog("内存上限: ${it}MB") }
+        settings.minMemoryMb?.let { appendLog("内存初始: ${it}MB") }
+
+        val profile = Profile("hmwlx-$versionId", versionArg, gameDir)
+            .withOptions(LaunchOptions(Optional.empty(), Optional.empty(), Optional.empty(), false))
+            .withVmArgs(vmArgs)
 
         // launcher() 内部完成：解析版本 → 下载资源 → 下载库 → 打补丁 → 构造命令。
         // 这段时间的进度通过 LaunchProgressBridge 流到界面。
@@ -533,8 +565,21 @@ class LaunchController(private val scope: CoroutineScope) {
         _state.update { it.copy(stage = LaunchStage.STARTING_PROCESS, progress = null) }
         appendLog("依赖已就绪，正在拉起游戏进程…")
 
-        return launcher.launch(true)
+        // 把实际生效的优先级随进程一起带回去。
+        //
+        // 不在调整处重新 load 一次：那会读第二遍配置文件，而用户完全
+        // 可能在启动过程中又改了设置 —— 于是「用哪套参数启动的」和
+        // 「事后按哪个优先级调整的」会指向两份不同的配置。
+        return LaunchedProcess(launcher.launch(true), settings.priority)
     }
+
+    /**
+     * 启动结果：进程句柄 + 以它启动时那份设置里的优先级。
+     *
+     * @param process headlessmc 返回的进程包装
+     * @param priority 生效的 nice 值，0 表示不调整
+     */
+    private data class LaunchedProcess(val process: McProcess, val priority: Int)
 
     /**
      * 持续读取进程输出，逐行脱敏后推送，并按关键字推进阶段。
