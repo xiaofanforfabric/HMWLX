@@ -320,10 +320,30 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
+          # 这里必须与 build job 的 upload-artifact 清单逐项对齐。
+          #
+          # 之前漏了 *.jar：build job 把 fat jar 传进了 artifact，但这一
+          # 步没把它拣进 release/，而创建 Release 只发 release/ 里的文件，
+          # 于是 jar 一路躺着到了 artifacts/ 里却从没出现在 Release 页面。
+          # 表现就是「流水线构建了 jar，但发版没打出来」。
+          #
+          # 加新产物时两处都要改，别只顾一头。
           find artifacts -type f \( \
             -name '*.exe' -o -name '*.run' -o -name '*.deb' \
             -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' \
+            -o -name '*.jar' \
           \) -exec cp {} release/ \;
+
+          # jar 是「直接跑」的兜底方式，缺了等于用户少一条路，
+          # 所以单独确认一次，不要静默放过去。
+          shopt -s nullglob
+          jars=(release/*.jar)
+          shopt -u nullglob
+          if [[ ${#jars[@]} -eq 0 ]]; then
+            echo "错误：Release 里没有 jar。检查 build job 的 upload-artifact 清单与本步的 find 条件是否一致。" >&2
+            exit 1
+          fi
+
           echo "=== 待发布 ==="
           ls -lh release/
 
@@ -375,8 +395,9 @@ jobs:
             echo "| Linux 通用 | \`HMWLX-${VERSION}-x86_64.AppImage\` | 单文件便携版 |"
             echo "| Debian/Ubuntu | \`hmwlx_${VERSION//-/\~}_amd64.deb\` | \`sudo apt install ./xxx.deb\` |"
             echo "| Fedora/RHEL | \`hmwlx-${VERSION//-/.}-1.x86_64.rpm\` | \`sudo dnf install ./xxx.rpm\` |"
+            echo "| 任意平台 | \`hmwlx-${VERSION}-all.jar\` | 已有 Java 时可直接 \`java -jar\` 运行 |"
             echo ""
-            echo "所有包都内置 Java 运行时，无需单独安装 Java。"
+            echo "除 jar 外的所有包都内置 Java 运行时，无需单独安装 Java。"
           } > /tmp/notes.md
 
           cat /tmp/notes.md
